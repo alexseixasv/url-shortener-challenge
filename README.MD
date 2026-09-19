@@ -10,6 +10,30 @@ Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a impl
 
 ---
 
+## Ambiente local
+
+Com Docker instalado:
+
+```bash
+cp .env.example .env
+docker compose up
+```
+
+Serviços no host (portas padrão do `.env.example`):
+
+| Serviço | URL / endereço |
+|---------|----------------|
+| API | http://localhost:3000 |
+| Web | http://localhost:5173 |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
+
+Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgres` e `redis`.
+
+A API ainda não conecta ao PostgreSQL nem ao Redis nesta etapa.
+
+---
+
 ## O problema
 
 À primeira vista, um encurtador de URLs parece ser basicamente uma associação entre um código curto e uma URL de destino.
