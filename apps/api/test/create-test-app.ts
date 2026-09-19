@@ -9,6 +9,7 @@ export async function createTestApp(): Promise<{
   moduleFixture: TestingModule;
 }> {
   process.env.SHORT_URL_BASE_URL ??= 'http://localhost:3000';
+  process.env.REDIS_URL ??= 'redis://localhost:6379';
 
   const moduleFixture = await Test.createTestingModule({
     imports: [AppModule],

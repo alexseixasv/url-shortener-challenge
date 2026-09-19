@@ -22,11 +22,13 @@ Modelo persistente inicial (PostgreSQL / Prisma). Agregação de stats: ver [ADR
 | Campo | Tipo | Notas |
 |-------|------|-------|
 | id | BIGSERIAL PK | |
+| eventId | UUID UNIQUE | idempotência do worker (ADR-003) |
 | linkId | UUID FK → links | ON DELETE RESTRICT |
-| accessedAt | TIMESTAMPTZ | |
-| referer / userAgent | TEXT NULL | |
+| accessedAt | TIMESTAMPTZ | instante do redirect |
+| referer / userAgent | TEXT NULL | truncados (máx. 2048) |
 
-Índice: `(link_id, accessed_at DESC)` — últimos 20 acessos.
+Índice: `(link_id, accessed_at DESC)` — últimos 20 acessos.  
+Agregação: [ADR-001](../adr/001-access-stats-aggregation.md). Autoridade `maxClicks`: [ADR-002](../adr/002-maxclicks-postgresql-authority.md). Analytics: [ADR-003](../adr/003-analytics-redis-streams.md).
 
 ### DailyLinkStat (`daily_link_stats`)
 
@@ -55,6 +57,7 @@ erDiagram
   }
   AccessEvent {
     bigint id PK
+    uuid eventId UK
     uuid linkId FK
     timestamptz accessedAt
     text referer

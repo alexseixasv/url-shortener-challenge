@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-echo "[api] Applying versioned Prisma migrations (migrate deploy)..."
+echo "[entrypoint] Applying versioned Prisma migrations (migrate deploy)..."
 pnpm exec prisma migrate deploy
 
-echo "[api] Starting NestJS..."
+echo "[entrypoint] Starting process..."
 exec "$@"

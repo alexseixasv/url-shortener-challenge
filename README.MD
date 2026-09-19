@@ -6,7 +6,7 @@ Antes de começar a implementação, preferi registrar minha leitura do problema
 
 Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a implementação revele algum trade-off que não esteja evidente neste momento.
 
-> **Status atual:** fundação, persistência e `POST /links` implementados. Redirect, cache, analytics e rate limiting ainda pendentes.
+> **Status atual:** fundação, persistência, `POST /links`, `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. `PATCH`, stats HTTP e rate limiting ainda pendentes.
 
 ---
 
@@ -19,16 +19,16 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Isso sobe PostgreSQL, Redis, API e Web. A API espera o Postgres healthy, aplica as migrations versionadas com `prisma migrate deploy` e só então inicia o Nest. Não é necessário entrar no container para `pnpm install`, `migrate` ou `db push`.
+Isso sobe PostgreSQL, Redis, API, **worker** e Web. A API e o worker esperam Postgres/Redis healthy, aplicam as migrations versionadas com `prisma migrate deploy` e só então iniciam. Não é necessário entrar no container para `pnpm install`, `migrate`, criar consumer group ou `db push`.
 
 `prisma generate` ocorre no **build** da imagem (Dockerfile), não a cada restart.
 
 Se você alterar `apps/api/package.json` depois de já ter um volume `api_node_modules` antigo, recrie só esse volume para ele refletir o lockfile novo (o volume `postgres_data` pode ser preservado):
 
 ```bash
-docker compose stop api
+docker compose stop api worker
 docker volume rm kiip-url-shortener-challenge_api_node_modules
-docker compose up -d --build api
+docker compose up -d --build api worker
 ```
 
 Serviços no host (portas padrão do `.env.example`):
@@ -39,14 +39,28 @@ Serviços no host (portas padrão do `.env.example`):
 | Web | http://localhost:5173 |
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:6379` |
+| Worker | processo interno (sem porta publicada) |
 
-Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgres` e `redis`.
+Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgres`, `redis` e `worker`.
 
-A API utiliza PostgreSQL via `DATABASE_URL`. No host (Prisma CLI / ferramentas locais), use `localhost`; no serviço `api` do Compose, o host é `postgres`.
+A API utiliza PostgreSQL via `DATABASE_URL` e Redis via `REDIS_URL`. No host (Prisma CLI / ferramentas locais), use `localhost`; no Compose, os hosts são `postgres` e `redis`.
 
 `SHORT_URL_BASE_URL` é a base pública usada para montar `shortUrl` em `POST /links` (ex.: `http://localhost:3000`). Não confundir com `API_PORT` / `PORT` (porta de listen). Sem trailing slash.
 
-Redis ainda não é utilizado pela aplicação.
+### Redirect (`GET /:slug`)
+
+Fluxo (ADR-002 / ADR-003):
+
+1. **Cache-aside** `link:{slug}` no Redis (metadata: `id`, `destinationUrl`, `active`, `expiresAt`, `maxClicks` — **sem** `clickCount`).
+2. Miss → PostgreSQL → popula cache (TTL `min(3600, expiresAt - now)` ou 3600; não cacheia link já expirado/inválido como válido).
+3. Validação `active` / `expiresAt` → `410` se indisponível; slug inexistente → `404`.
+4. **Unlimited** (`maxClicks` null): autoriza sem `UPDATE` síncrono; publica analytics best-effort; `302`.
+5. **Capped**: autoridade exclusiva no PostgreSQL via `UPDATE` condicional atômico (`clickCount < maxClicks` + active/expiry). 1 row → `302` + evento `preCounted=true`; 0 rows → `410`. Falha de PG no gate → `5xx` (nunca fail-open).
+6. Analytics: Redis Streams (`access_events`, group `analytics-workers`), `eventId` UUID UNIQUE, enqueue **non-blocking** por padrão (`ANALYTICS_ENQUEUE_TIMEOUT_MS=0`). Worker: `XREADGROUP` → TX idempotente → `XACK` só após `COMMIT`; reclaim via `XAUTOCLAIM`; poison → DLQ `access_events:dlq` após `ANALYTICS_MAX_ATTEMPTS` (default 5).
+
+Delivery: at-least-once pós-aceite; dedup por `eventId`. Perda pré-aceite (Redis down no publish) é aceitável e **não** bloqueia o `302`. Cache Redis down → fallback PG. Worker down → stream acumula; redirect continua.
+
+Detalhes: [ADR-002](docs/adr/002-maxclicks-postgresql-authority.md), [ADR-003](docs/adr/003-analytics-redis-streams.md).
 
 Para desenvolver a API **fora** do Compose (Postgres já no ar), as migrations podem ser aplicadas no host:
 
@@ -86,7 +100,7 @@ A primeira versão será composta por:
 - **React** no frontend;
 - **NestJS** na API;
 - **PostgreSQL + Prisma** para persistência;
-- **Redis** para cache, rate limiting e operações que precisam de atomicidade;
+- **Redis** para cache-aside de metadata de links, fila de analytics (Streams) e (futuro) rate limiting — **não** como autoridade de `maxClicks` (ver ADR-002);
 - **processamento assíncrono** dos eventos de acesso;
 - **Docker Compose** para subir o ambiente completo.
 
@@ -355,18 +369,9 @@ As duas poderiam ler `99` antes que qualquer uma delas atualizasse o valor e amb
 
 A solução precisa garantir atomicidade nessa operação.
 
-Minha intenção inicial é utilizar uma operação atômica no Redis para controlar esse contador no caminho do redirect, mantendo posteriormente o estado persistido no PostgreSQL.
+**Decisão final (ADR-002):** links capped usam um `UPDATE` condicional atômico no **PostgreSQL** como única autoridade (`clickCount < maxClicks` + `active` + `expiresAt`). Redis guarda só metadata de cache — não é autoridade de enforcement. Links unlimited não fazem esse write no hot path; o worker incrementa `clickCount` após o evento (ADR-003).
 
-Antes de fechar essa implementação, quero validar principalmente:
-
-- inicialização do contador;
-- cache miss;
-- expiração;
-- concorrência;
-- comportamento em caso de indisponibilidade do Redis;
-- sincronização com o estado persistido.
-
-A solução final será documentada depois dessa validação.
+Ver [ADR-002](docs/adr/002-maxclicks-postgresql-authority.md).
 
 ---
 
@@ -629,24 +634,24 @@ Objetivo: terminar o dia com o núcleo funcional da aplicação funcionando.
 
 ### Redirect
 
-- [ ] implementar `GET /:slug`;
-- [ ] retornar `404` para links inexistentes;
-- [ ] retornar `410` para links indisponíveis;
-- [ ] implementar redirect `302`;
-- [ ] implementar cache-aside com Redis;
-- [ ] tratar cache hit e cache miss;
+- [x] implementar `GET /:slug`;
+- [x] retornar `404` para links inexistentes;
+- [x] retornar `410` para links indisponíveis;
+- [x] implementar redirect `302`;
+- [x] implementar cache-aside com Redis;
+- [x] tratar cache hit e cache miss;
 - [ ] implementar invalidação de cache;
-- [ ] tratar concorrência relacionada a `maxClicks`.
+- [x] tratar concorrência relacionada a `maxClicks`.
 
 ### Analytics
 
-- [ ] definir o mecanismo da fila;
-- [ ] publicar eventos de acesso sem bloquear o redirect;
-- [ ] criar o worker;
-- [ ] persistir os acessos individuais;
-- [ ] atualizar o contador total;
-- [ ] atualizar as agregações diárias;
-- [ ] garantir que falhas no processamento de analytics não impeçam o redirect.
+- [x] definir o mecanismo da fila;
+- [x] publicar eventos de acesso sem bloquear o redirect;
+- [x] criar o worker;
+- [x] persistir os acessos individuais;
+- [x] atualizar o contador total;
+- [x] atualizar as agregações diárias;
+- [x] garantir que falhas no processamento de analytics não impeçam o redirect.
 
 A principal meta do sábado é conseguir executar o seguinte fluxo:
 
@@ -711,25 +716,25 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 - [x] criação de link;
 - [x] URL inválida;
 - [x] slug personalizado duplicado;
-- [ ] expiração;
-- [ ] desativação;
+- [x] expiração;
+- [x] desativação;
 - [x] `maxClicks`;
-- [ ] concorrência no limite de acessos;
-- [ ] redirect `302`;
-- [ ] cache hit;
-- [ ] cache miss;
+- [x] concorrência no limite de acessos;
+- [x] redirect `302`;
+- [x] cache hit;
+- [x] cache miss;
 - [ ] invalidação de cache;
-- [ ] processamento dos eventos de acesso;
+- [x] processamento dos eventos de acesso;
 - [ ] estatísticas;
-- [ ] pelo menos um fluxo E2E completo de redirecionamento.
+- [x] pelo menos um fluxo E2E completo de redirecionamento.
 
 ### Documentação
 
 - [ ] revisar este README;
 - [ ] atualizar decisões que tenham mudado durante a implementação;
 - [x] documentar a estratégia final de geração de slugs;
-- [ ] documentar a solução final para `maxClicks`;
-- [ ] documentar o mecanismo escolhido para processamento assíncrono;
+- [x] documentar a solução final para `maxClicks`;
+- [x] documentar o mecanismo escolhido para processamento assíncrono;
 - [ ] atualizar a seção de uso de IA;
 - [ ] adicionar o System Design final;
 - [ ] documentar como executar a aplicação;

@@ -25,6 +25,7 @@ model Link {
 
 model AccessEvent {
   id         BigInt   @id @default(autoincrement())
+  eventId    String   @unique @db.Uuid
   linkId     String   @db.Uuid
   accessedAt DateTime @default(now()) @db.Timestamptz(3)
   referer    String?  @db.Text

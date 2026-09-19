@@ -36,13 +36,37 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
       SHORT_URL_BASE_URL: ${SHORT_URL_BASE_URL}
+      ANALYTICS_ENQUEUE_TIMEOUT_MS: ${ANALYTICS_ENQUEUE_TIMEOUT_MS:-0}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - ./apps/api:/app/apps/api
       - api_node_modules:/app/apps/api/node_modules
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      ANALYTICS_CONSUMER_NAME: ${ANALYTICS_CONSUMER_NAME:-worker-1}
+      ANALYTICS_PENDING_IDLE_MS: ${ANALYTICS_PENDING_IDLE_MS:-60000}
+      ANALYTICS_MAX_ATTEMPTS: ${ANALYTICS_MAX_ATTEMPTS:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app/apps/api
+      - api_node_modules:/app/apps/api/node_modules
+    command: ["pnpm", "exec", "nest", "start", "--entryFile", "worker.main", "--watch", "--no-shell"]
 
   web:
     build:
