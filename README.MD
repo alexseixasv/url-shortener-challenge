@@ -30,7 +30,16 @@ Serviços no host (portas padrão do `.env.example`):
 
 Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgres` e `redis`.
 
-A API ainda não conecta ao PostgreSQL nem ao Redis nesta etapa.
+A API utiliza PostgreSQL via `DATABASE_URL`. No host (Prisma CLI / migrate), use `localhost`; no serviço `api` do Compose, o host é `postgres`.
+
+Redis ainda não é utilizado pela aplicação.
+
+Aplicar migrations (com Postgres no ar e `DATABASE_URL` apontando para o banco):
+
+```bash
+pnpm --filter api exec prisma migrate deploy
+pnpm --filter api exec prisma generate
+```
 
 ---
 
@@ -543,14 +552,14 @@ Objetivo: terminar o dia com o núcleo funcional da aplicação funcionando.
 
 ### Fundação
 
-- [ ] criar a estrutura do monorepo;
-- [ ] configurar NestJS;
-- [ ] configurar PostgreSQL;
-- [ ] configurar Prisma;
-- [ ] configurar Redis;
-- [ ] criar o Docker Compose;
-- [ ] configurar variáveis de ambiente e `.env.example`;
-- [ ] criar e validar as migrations iniciais.
+- [x] criar a estrutura do monorepo;
+- [x] configurar NestJS;
+- [x] configurar PostgreSQL;
+- [x] configurar Prisma;
+- [x] configurar Redis;
+- [x] criar o Docker Compose;
+- [x] configurar variáveis de ambiente e `.env.example`;
+- [x] criar e validar as migrations iniciais.
 
 ### Links
 

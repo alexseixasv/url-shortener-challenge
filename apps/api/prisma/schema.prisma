@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Link {
+  id             String          @id @default(uuid()) @db.Uuid
+  slug           String          @unique @db.VarChar(64)
+  destinationUrl String          @db.Text
+  active         Boolean         @default(true)
+  expiresAt      DateTime?       @db.Timestamptz(3)
+  maxClicks      BigInt?
+  clickCount     BigInt          @default(0)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
+  accessEvents   AccessEvent[]
+  dailyStats     DailyLinkStat[]
+
+  @@map("links")
+}
+
+model AccessEvent {
+  id         BigInt   @id @default(autoincrement())
+  linkId     String   @db.Uuid
+  accessedAt DateTime @default(now()) @db.Timestamptz(3)
+  referer    String?  @db.Text
+  userAgent  String?  @db.Text
+  link       Link     @relation(fields: [linkId], references: [id], onDelete: Restrict)
+
+  @@index([linkId, accessedAt(sort: Desc)])
+  @@map("access_events")
+}
+
+model DailyLinkStat {
+  linkId     String   @db.Uuid
+  date       DateTime @db.Date
+  clickCount BigInt   @default(0)
+  link       Link     @relation(fields: [linkId], references: [id], onDelete: Restrict)
+
+  @@id([linkId, date])
+  @@map("daily_link_stats")
+}

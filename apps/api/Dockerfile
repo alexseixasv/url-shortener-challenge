@@ -1,5 +1,9 @@
 FROM node:22-bookworm-slim
 
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 WORKDIR /app
@@ -12,6 +16,8 @@ RUN pnpm install --filter api...
 COPY apps/api ./apps/api
 
 WORKDIR /app/apps/api
+
+RUN pnpm exec prisma generate
 
 EXPOSE 3000
 
