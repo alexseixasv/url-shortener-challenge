@@ -36,6 +36,7 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      SHORT_URL_BASE_URL: ${SHORT_URL_BASE_URL}
     depends_on:
       postgres:
         condition: service_healthy

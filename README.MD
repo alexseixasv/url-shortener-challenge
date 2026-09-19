@@ -6,7 +6,7 @@ Antes de começar a implementação, preferi registrar minha leitura do problema
 
 Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a implementação revele algum trade-off que não esteja evidente neste momento.
 
-> **Status atual:** planejamento e arquitetura concluídos. Implementação ainda não iniciada.
+> **Status atual:** fundação, persistência e `POST /links` implementados. Redirect, cache, analytics e rate limiting ainda pendentes.
 
 ---
 
@@ -16,7 +16,19 @@ Com Docker instalado:
 
 ```bash
 cp .env.example .env
-docker compose up
+docker compose up --build
+```
+
+Isso sobe PostgreSQL, Redis, API e Web. A API espera o Postgres healthy, aplica as migrations versionadas com `prisma migrate deploy` e só então inicia o Nest. Não é necessário entrar no container para `pnpm install`, `migrate` ou `db push`.
+
+`prisma generate` ocorre no **build** da imagem (Dockerfile), não a cada restart.
+
+Se você alterar `apps/api/package.json` depois de já ter um volume `api_node_modules` antigo, recrie só esse volume para ele refletir o lockfile novo (o volume `postgres_data` pode ser preservado):
+
+```bash
+docker compose stop api
+docker volume rm kiip-url-shortener-challenge_api_node_modules
+docker compose up -d --build api
 ```
 
 Serviços no host (portas padrão do `.env.example`):
@@ -30,11 +42,13 @@ Serviços no host (portas padrão do `.env.example`):
 
 Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgres` e `redis`.
 
-A API utiliza PostgreSQL via `DATABASE_URL`. No host (Prisma CLI / migrate), use `localhost`; no serviço `api` do Compose, o host é `postgres`.
+A API utiliza PostgreSQL via `DATABASE_URL`. No host (Prisma CLI / ferramentas locais), use `localhost`; no serviço `api` do Compose, o host é `postgres`.
+
+`SHORT_URL_BASE_URL` é a base pública usada para montar `shortUrl` em `POST /links` (ex.: `http://localhost:3000`). Não confundir com `API_PORT` / `PORT` (porta de listen). Sem trailing slash.
 
 Redis ainda não é utilizado pela aplicação.
 
-Aplicar migrations (com Postgres no ar e `DATABASE_URL` apontando para o banco):
+Para desenvolver a API **fora** do Compose (Postgres já no ar), as migrations podem ser aplicadas no host:
 
 ```bash
 pnpm --filter api exec prisma migrate deploy
@@ -358,36 +372,23 @@ A solução final será documentada depois dessa validação.
 
 ## Slugs
 
-Slugs personalizados são mais simples.
+Slugs personalizados usam o charset Base62 (`0-9`, `A-Z`, `a-z`), length 1–64, case-sensitive. O valor `links` é rejeitado para não conflitar com rotas `/links/*` quando `GET /:slug` existir. Tentativa de reutilizar um slug existente falha com `409` sem sobrescrever o link anterior — a constraint `UNIQUE` do PostgreSQL é a autoridade final.
 
-O banco terá uma restrição `UNIQUE` em `slug`, e uma tentativa de reutilizar um valor existente deve falhar sem sobrescrever o link anterior.
+### Geração automática
 
-Para os slugs automáticos, pretendo utilizar caracteres compatíveis com Base62:
+Quando `slug` não é informado, a API gera um slug Base62 de **8** caracteres com `crypto.randomInt` (sem `Math.random`), faz `INSERT` e, em colisão `UNIQUE`, regenera e tenta de novo (máximo **5** tentativas).
 
-    0-9
-    a-z
-    A-Z
+Espaço: \(62^8 \approx 2{,}18 \times 10^{14}\).
 
-Isso oferece um espaço grande de combinações mantendo URLs curtas e compatíveis com o formato necessário.
+O argumento relevante para o retry não é a probabilidade acumulada estilo birthday problem sobre todo o histórico, e sim a chance de uma **nova** geração cair em um slug já ocupado:
 
-Ainda não considero a estratégia de geração fechada.
+\[
+p \approx \frac{n}{N}
+\]
 
-Existem algumas opções possíveis, como:
+Com ~73M links (~10 anos a ~20k/dia): \(p \approx 73 \times 10^6 / 2{,}18 \times 10^{14} \approx 3{,}3 \times 10^{-7}\) — cerca de uma colisão a cada ~3 milhões de novas tentativas nesse nível de ocupação. Com `UNIQUE` + retry, length 8 permanece adequado.
 
-- gerar valores aleatórios e tratar colisões;
-- derivar o slug de um identificador único;
-- utilizar outra estratégia que garanta distribuição e simplicidade operacional.
-
-Quero tomar essa decisão durante a implementação considerando principalmente:
-
-- tamanho do slug;
-- possibilidade de colisão;
-- concorrência;
-- previsibilidade;
-- necessidade de consultas adicionais;
-- complexidade introduzida.
-
-Independentemente da estratégia escolhida, a unicidade continuará sendo garantida pelo PostgreSQL.
+Unicidade continua garantida pelo PostgreSQL em todos os casos. Se as 5 tentativas de geração automática esgotarem (extremamente improvável na escala do desafio), a API responde `503`.
 
 ---
 
@@ -617,13 +618,13 @@ Objetivo: terminar o dia com o núcleo funcional da aplicação funcionando.
 
 ### Links
 
-- [ ] implementar `POST /links`;
-- [ ] validar URL de destino;
-- [ ] implementar slug personalizado;
-- [ ] definir e implementar a geração automática de slug;
-- [ ] garantir unicidade no banco;
-- [ ] implementar `expiresAt`;
-- [ ] implementar `maxClicks`;
+- [x] implementar `POST /links`;
+- [x] validar URL de destino;
+- [x] implementar slug personalizado;
+- [x] definir e implementar a geração automática de slug;
+- [x] garantir unicidade no banco;
+- [x] implementar `expiresAt`;
+- [x] implementar `maxClicks`;
 - [ ] implementar rate limiting por IP.
 
 ### Redirect
@@ -707,12 +708,12 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 
 ### Testes
 
-- [ ] criação de link;
-- [ ] URL inválida;
-- [ ] slug personalizado duplicado;
+- [x] criação de link;
+- [x] URL inválida;
+- [x] slug personalizado duplicado;
 - [ ] expiração;
 - [ ] desativação;
-- [ ] `maxClicks`;
+- [x] `maxClicks`;
 - [ ] concorrência no limite de acessos;
 - [ ] redirect `302`;
 - [ ] cache hit;
@@ -726,7 +727,7 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 
 - [ ] revisar este README;
 - [ ] atualizar decisões que tenham mudado durante a implementação;
-- [ ] documentar a estratégia final de geração de slugs;
+- [x] documentar a estratégia final de geração de slugs;
 - [ ] documentar a solução final para `maxClicks`;
 - [ ] documentar o mecanismo escolhido para processamento assíncrono;
 - [ ] atualizar a seção de uso de IA;
