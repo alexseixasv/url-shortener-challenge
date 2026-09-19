@@ -1,0 +1,61 @@
+---
+description: Guardrails de implementação da API NestJS (apps/api)
+globs: apps/api/**
+alwaysApply: false
+---
+
+# Backend
+
+Rule de implementação — não substitui análise de `architect`, `database`, `testing` ou `reviewer`.
+Quando o trabalho tocar contratos, modelo ou arquitetura, consulte `README.MD`, `docs/architecture/` e `docs/adr/`. Não copie decisões desses docs para cá; não invente comportamento fora do documentado; não introduza infra (cache, fila, broker) sem pedido concreto.
+
+## NestJS
+
+- Módulos com responsabilidade clara; controllers = HTTP; services = regras/orquestração.
+- DTOs para contratos de entrada; DI explícita; evite providers globais sem necessidade.
+- Evite patterns de framework (repository genérico, use-case/CQRS, etc.) sem problema concreto.
+- Erros internos não devem vazar diretamente para HTTP.
+
+## TypeScript
+
+- Typing estrito; evite `any`; não use assertions para esconder inconsistências.
+- Distinga tipos de transporte de tipos de persistência.
+- Trate BigInt conscientemente nas boundaries JSON.
+- Prefira código explícito a abstrações genéricas prematuras.
+
+## API design
+
+- Contrato HTTP explícito; status codes coerentes; validação na boundary (não confie só no banco).
+- Não duplique regra de negócio entre controller e service.
+- Responses não devem serializar entidades Prisma sem decisão consciente de contrato.
+
+## PostgreSQL / Prisma
+
+- Consulte `schema.prisma` + `docs/architecture/` + ADRs quando persistência estiver envolvida.
+- Migrations versionadas; não use `db push` como fluxo normal.
+- Constraints do banco = última linha de integridade; não use check-then-write como proteção exclusiva de unicidade.
+- Transações/atomicidade quando múltiplas operações formarem um invariant.
+- Selecione só o necessário; evite N+1; avalie query pattern antes de adicionar índice.
+- Não introduza repository genérico só para esconder Prisma.
+
+## Concorrência
+
+Se duas requests puderem modificar/decidir o mesmo estado: identifique o invariant; não assuma execução sequencial; evite TOCTOU; use atomicidade no banco/cache conforme arquitetura vigente; exija teste concorrente quando a correção depender disso.
+
+## Performance
+
+Em caminhos sensíveis: identifique hot path; minimize round trips; evite trabalho síncrono desnecessário e scans/agregações não limitadas; considere cardinalidade/volume. Não otimize caminhos irrelevantes sem evidência/requisito.
+
+## Resiliência
+
+Com dependências externas: defina se falha propaga, degrada ou é ignorada; não esconda falhas que afetam invariants; distinga operações críticas de best-effort.
+
+## Observabilidade
+
+Sem stack nova: erros com contexto útil internamente; não logue secrets; sem logging pesado no hot path; mantenha possibilidade de diagnosticar falhas.
+
+## Testabilidade
+
+- Separe regra pura só quando isso realmente facilitar teste.
+- Não arquitete produção só para facilitar mocks; prefira DI.
+- Comportamento importante do banco deve poder ser testado contra banco real.

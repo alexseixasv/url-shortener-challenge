@@ -503,19 +503,73 @@ Esses componentes fazem parte da discussão de evolução da arquitetura, não d
 
 ## Uso de IA
 
-Estou utilizando IA como ferramenta de apoio durante o desafio.
+Estou utilizando IA como ferramenta de apoio à engenharia durante o desafio — não como substituto de revisão ou responsabilidade humana.
 
-Nesta etapa inicial, usei principalmente para confrontar as decisões que estava tomando: levantar casos de concorrência, questionar pontos frágeis da arquitetura e discutir alternativas antes de começar a escrever código.
+Nesta etapa, a IA foi usada para explorar alternativas, revisar decisões, identificar edge cases, apoiar implementação, derivar/revisar testes e revisar alterações. Decisões relevantes são revisadas antes da implementação; código gerado ou alterado precisa ser compreendido; testes verdes não são tratados isoladamente como prova de correção; commits são feitos manualmente após revisão humana. A responsabilidade pelas decisões e pelo código permanece humana.
 
-Um exemplo foi a discussão sobre `maxClicks`: uma implementação simples baseada em leitura e incremento poderia funcionar em testes básicos, mas teria comportamento incorreto com requisições concorrentes.
+Um exemplo inicial foi a discussão sobre `maxClicks`: uma implementação simples baseada em leitura e incremento poderia passar em testes básicos e ainda falhar com requisições concorrentes. Outro ponto foi a relação entre cache e desativação imediata dos links — Redis melhora a leitura, mas exige invalidação quando a alteração precisa ter efeito imediato.
 
-Outro ponto discutido foi a relação entre cache e desativação imediata dos links. Adicionar Redis melhora o caminho de leitura, mas também cria a responsabilidade de invalidar esse estado quando uma alteração precisa ter efeito imediato.
+As decisões descritas neste documento e em `docs/` são as que escolhi seguir depois dessa análise; preciso conseguir justificar os trade-offs de cada uma delas.
 
-Também utilizei IA para revisar o desenho inicial da arquitetura e procurar componentes que estivessem sendo adicionados sem necessidade real.
+### Compound Engineering
 
-As decisões descritas neste documento são as que escolhi seguir depois dessa análise e preciso conseguir justificar os trade-offs de cada uma delas.
+Para não reconstruir o mesmo contexto a cada prompt, decisões e aprendizados relevantes ficam persistidos como documentação de arquitetura, ADRs, project rules e agents especializados. O objetivo é reutilizar contexto entre unidades de trabalho, não acumular arquivos por quantidade.
 
-Se eu utilizar IA em outras partes relevantes da implementação, vou atualizar esta seção indicando onde e com qual finalidade ela foi utilizada.
+#### Fontes de verdade
+
+| Camada | Papel |
+|--------|--------|
+| `README.MD` | requisitos, execução e visão do projeto |
+| `docs/architecture/` | arquitetura implementada |
+| `docs/adr/` | decisões arquiteturais e trade-offs |
+| `.cursor/rules/` | guardrails de implementação |
+| `.cursor/agents/` | especialistas de análise |
+
+Não duplicar decisões entre essas camadas: rules e agents apontam para a documentação; não a reescrevem.
+
+#### Estrutura
+
+```text
+.cursor/
+├── rules/
+│   ├── 00-project.mdc
+│   ├── backend.mdc
+│   └── frontend.mdc
+└── agents/
+    ├── architect.md
+    ├── database.md
+    ├── testing.md
+    └── reviewer.md
+```
+
+**Rules** — guardrails aplicados durante o desenvolvimento:
+
+- `00-project` — escopo, fontes de verdade, dependências, documentação e Git;
+- `backend` — NestJS, TypeScript, API, Prisma/PostgreSQL, concorrência e performance;
+- `frontend` — React, TypeScript, integração com API, UX e acessibilidade.
+
+**Agents** — especialistas sob demanda:
+
+- `architect` — alternativas e trade-offs antes de decisões arquiteturais relevantes;
+- `database` — modelagem, queries, índices, migrations, integridade e concorrência;
+- `testing` — cenários derivados dos requisitos e gaps independentemente da implementação;
+- `reviewer` — confronta implementação, requisitos, documentação e testes antes do commit.
+
+#### Fluxo
+
+```text
+Requirement
+  → Context
+  → Plan
+  → Architecture / Data review (quando necessário)
+  → Implementation
+  → Testing
+  → Technical review
+  → Human review
+  → Manual commit
+```
+
+Nem todo agent participa de toda alteração. Exemplos: decisão arquitetural relevante → `architect`; mudança sensível de persistência → `database`; nova regra de negócio → `testing`; unidade concluída → `reviewer`. Especialização só quando agrega valor.
 
 ---
 
