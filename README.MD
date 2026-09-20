@@ -6,7 +6,7 @@ Antes de começar a implementação, preferi registrar minha leitura do problema
 
 Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a implementação revele algum trade-off que não esteja evidente neste momento.
 
-> **Status atual:** fundação, persistência, `POST /links` (rate limit por IP), `GET /links` (lista auxiliar UI, 50 mais recentes), `PATCH /links/:slug` (disable + invalidação de cache), `GET /links/:slug/stats`, `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. Frontend ainda pendente.
+> **Status atual:** backend completo para o challenge (`POST/GET/PATCH` links, redirect, stats, analytics Redis Streams, rate limit) e **frontend React** em `apps/web` (create / list / stats / disable) com identidade Kiip.
 
 ---
 
@@ -43,9 +43,27 @@ Serviços no host (portas padrão do `.env.example`):
 
 Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgres`, `redis` e `worker`.
 
+### Interface web
+
+- URL: http://localhost:5173 (porta `WEB_PORT`)
+- Identidade visual: [docs/design/kiip-ui.md](docs/design/kiip-ui.md) (referência de princípios: [docs/design/design-reference.md](docs/design/design-reference.md) — **não** copiar identidade Coinbase)
+- Fluxo: criar link → short URL + Copy → lista dos 50 mais recentes → View stats → Disable
+- Endpoints consumidos: `POST /links`, `GET /links`, `GET /links/:slug/stats`, `PATCH /links/:slug`
+- Env: `VITE_API_BASE_URL` (browser → API), `CORS_ORIGIN` (API → origem do Vite)
+
+Testes do frontend (Vitest, lógica pura / client HTTP):
+
+```bash
+pnpm --filter web test
+```
+
 A API utiliza PostgreSQL via `DATABASE_URL` e Redis via `REDIS_URL`. No host (Prisma CLI / ferramentas locais), use `localhost`; no Compose, os hosts são `postgres` e `redis`.
 
-`SHORT_URL_BASE_URL` é a base pública usada para montar `shortUrl` em `POST /links` (ex.: `http://localhost:3000`). Não confundir com `API_PORT` / `PORT` (porta de listen). Sem trailing slash.
+`SHORT_URL_BASE_URL` é a base pública usada para montar `shortUrl` em `POST /links` e `GET /links` (ex.: `http://localhost:3000`). Não confundir com `API_PORT` / `PORT` (porta de listen). Sem trailing slash.
+
+`VITE_API_BASE_URL` é a URL que o **browser** usa para chamar a API. Deve ser resolvível no host — **não** use `http://api:3000`. No Compose, se a variável estiver ausente, o default é `http://localhost:${API_PORT}`.
+
+`CORS_ORIGIN` é a origem exata do frontend permitida pela API. No Compose, se a variável estiver ausente, o default é `http://localhost:${WEB_PORT}` (sem wildcard). Defina `CORS_ORIGIN` explicitamente só para sobrescrever.
 
 ### Redirect (`GET /:slug`)
 
@@ -234,7 +252,7 @@ Além da questão de latência, isso atende uma regra importante do problema: um
 
 O worker será responsável por consumir os eventos e persistir as informações necessárias no PostgreSQL.
 
-Ainda vou definir durante a implementação qual mecanismo vou utilizar para essa fila. Quero manter essa escolha proporcional ao problema e ao ambiente executado via Docker Compose.
+**Mecanismo escolhido:** Redis Streams (`access_events`, consumer group `analytics-workers`) + worker Nest (`worker.main`). Enqueue no redirect é non-blocking por padrão; persistência idempotente por `eventId` UUID UNIQUE. Detalhes em ADR-003.
 
 ---
 
@@ -601,11 +619,19 @@ Esses componentes fazem parte da discussão de evolução da arquitetura, não d
 
 ## Uso de IA
 
-Estou utilizando IA como ferramenta de apoio à engenharia durante o desafio — não como substituto de revisão ou responsabilidade humana.
+Estou utilizando IA (Cursor / agentes especializados no repositório) como ferramenta de apoio à engenharia durante o desafio — não como substituto de revisão ou responsabilidade humana.
 
-Nesta etapa, a IA foi usada para explorar alternativas, revisar decisões, identificar edge cases, apoiar implementação, derivar/revisar testes e revisar alterações. Decisões relevantes são revisadas antes da implementação; código gerado ou alterado precisa ser compreendido; testes verdes não são tratados isoladamente como prova de correção; commits são feitos manualmente após revisão humana. A responsabilidade pelas decisões e pelo código permanece humana.
+A IA apoiou:
 
-Um exemplo inicial foi a discussão sobre `maxClicks`: uma implementação simples baseada em leitura e incremento poderia passar em testes básicos e ainda falhar com requisições concorrentes. Outro ponto foi a relação entre cache e desativação imediata dos links — Redis melhora a leitura, mas exige invalidação quando a alteração precisa ter efeito imediato.
+- discussão e documentação de arquitetura (ADRs, modelagem, trade-offs);
+- implementação e ajustes de código (API e frontend);
+- derivação e revisão de testes;
+- revisão de alterações (contratos, índices, UX);
+- documentação (README, design Kiip).
+
+Decisões relevantes foram revisadas antes ou durante a implementação; código gerado ou alterado precisa ser compreendido; testes verdes não são tratados isoladamente como prova de correção; commits são feitos manualmente após revisão humana. A responsabilidade pelas decisões e pelo código permanece humana.
+
+Um exemplo inicial foi a discussão sobre `maxClicks`: uma implementação simples baseada em leitura e incremento poderia passar em testes básicos e ainda falhar com requisições concorrentes. Outro ponto foi a relação entre cache e desativação imediata dos links — Redis melhora a leitura, mas exige invalidação quando a alteração precisa ter efeito imediato. No frontend, a listagem via `GET /links` (em vez de inventário só no cliente) foi a decisão para manter o backend como autoridade.
 
 As decisões descritas neste documento e em `docs/` são as que escolhi seguir depois dessa análise; preciso conseguir justificar os trade-offs de cada uma delas.
 
@@ -620,6 +646,8 @@ Para não reconstruir o mesmo contexto a cada prompt, decisões e aprendizados r
 | `README.MD` | requisitos, execução e visão do projeto |
 | `docs/architecture/` | arquitetura implementada |
 | `docs/adr/` | decisões arquiteturais e trade-offs |
+| `docs/design/kiip-ui.md` | UI real (cores, tipografia, componentes) |
+| `docs/design/design-reference.md` | referência de princípios visuais apenas |
 | `.cursor/rules/` | guardrails de implementação |
 | `.cursor/agents/` | especialistas de análise |
 
@@ -795,13 +823,13 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 
 ### Frontend
 
-- [ ] criar a aplicação React;
-- [ ] implementar formulário de criação de links;
-- [ ] listar links criados;
-- [ ] exibir total de acessos;
-- [ ] criar visualização das estatísticas;
-- [ ] tratar estados de loading e erro;
-- [ ] manter a interface simples, priorizando funcionalidade.
+- [x] criar a aplicação React;
+- [x] implementar formulário de criação de links;
+- [x] listar links criados;
+- [x] exibir total de acessos;
+- [x] criar visualização das estatísticas;
+- [x] tratar estados de loading e erro;
+- [x] manter a interface simples, priorizando funcionalidade.
 
 ### Testes
 
@@ -827,10 +855,10 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 - [x] documentar a estratégia final de geração de slugs;
 - [x] documentar a solução final para `maxClicks`;
 - [x] documentar o mecanismo escolhido para processamento assíncrono;
-- [ ] atualizar a seção de uso de IA;
+- [x] atualizar a seção de uso de IA;
 - [ ] adicionar o System Design final;
-- [ ] documentar como executar a aplicação;
-- [ ] documentar como executar os testes.
+- [x] documentar como executar a aplicação;
+- [x] documentar como executar os testes.
 
 ---
 

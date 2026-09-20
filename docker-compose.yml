@@ -42,6 +42,8 @@ services:
       RATE_LIMIT_POST_LINKS_MAX: ${RATE_LIMIT_POST_LINKS_MAX:-30}
       RATE_LIMIT_POST_LINKS_WINDOW_SECONDS: ${RATE_LIMIT_POST_LINKS_WINDOW_SECONDS:-60}
       TRUST_PROXY: ${TRUST_PROXY:-false}
+      # Default origin tracks WEB_PORT; set CORS_ORIGIN explicitly to override.
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:${WEB_PORT}}
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +81,9 @@ services:
       - "${WEB_PORT}:5173"
     environment:
       CHOKIDAR_USEPOLLING: "true"
+      # Browser on the host calls published API port — not the Compose hostname "api".
+      # Default tracks API_PORT; set VITE_API_BASE_URL explicitly to override.
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${API_PORT}}
     volumes:
       - ./apps/web:/app/apps/web
       - web_node_modules:/app/apps/web/node_modules

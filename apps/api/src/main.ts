@@ -1,3 +1,4 @@
+import { applyCorsFromEnv } from './cors.js';
 import { applyTrustProxyFromEnv } from './trust-proxy.js';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -5,6 +6,7 @@ import { AppModule } from './app.module.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  applyCorsFromEnv(app);
   applyTrustProxyFromEnv(app);
   app.useGlobalPipes(
     new ValidationPipe({
