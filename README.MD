@@ -6,7 +6,7 @@ Antes de começar a implementação, preferi registrar minha leitura do problema
 
 Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a implementação revele algum trade-off que não esteja evidente neste momento.
 
-> **Status atual:** fundação, persistência, `POST /links`, `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. `PATCH`, stats HTTP e rate limiting ainda pendentes.
+> **Status atual:** fundação, persistência, `POST /links` (com rate limit por IP), `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. `PATCH`, stats HTTP e frontend ainda pendentes.
 
 ---
 
@@ -100,7 +100,7 @@ A primeira versão será composta por:
 - **React** no frontend;
 - **NestJS** na API;
 - **PostgreSQL + Prisma** para persistência;
-- **Redis** para cache-aside de metadata de links, fila de analytics (Streams) e (futuro) rate limiting — **não** como autoridade de `maxClicks` (ver ADR-002);
+- **Redis** para cache-aside de metadata de links, fila de analytics (Streams) e rate limiting de `POST /links` — **não** como autoridade de `maxClicks` (ver ADR-002);
 - **processamento assíncrono** dos eventos de acesso;
 - **Docker Compose** para subir o ambiente completo.
 
@@ -399,11 +399,20 @@ Unicidade continua garantida pelo PostgreSQL em todos os casos. Se as 5 tentativ
 
 ## Rate limiting
 
-A criação de links terá rate limiting por IP.
+Somente **`POST /links`** é limitado por IP. **`GET /:slug` não** entra no limiter.
 
-Como o Redis já faz parte da arquitetura, pretendo utilizá-lo também para manter os contadores dessa limitação, evitando adicionar outro componente apenas para isso.
+- Algoritmo: **fixed window** no Redis.
+- Key: `rl:post-links:{ip}` com TTL = janela (sem keys permanentes).
+- Atomicidade: script Lua em **uma** ida ao Redis — `INCR`; se primeira ocorrência, `EXPIRE`; retorna `{count, ttl}` para allow/deny e `Retry-After`.
+- Excedeu → **429** `{ statusCode: 429, message: "rate limit exceeded" }` + header **`Retry-After`** (segundos restantes da janela).
+- Redis indisponível → **fail-open** (criação segue; log `rate_limit_unavailable`). Rate limit é proteção, não fonte de verdade dos links.
+- IP: `req.ip`. `TRUST_PROXY` só se configurado explicitamente (`true`/`1` ou hops); sem isso não se confia em `X-Forwarded-For`.
 
-O redirecionamento não terá o mesmo limite, já que é justamente o endpoint projetado para receber o maior volume de tráfego.
+| Env | Default |
+|-----|---------|
+| `RATE_LIMIT_POST_LINKS_MAX` | `30` |
+| `RATE_LIMIT_POST_LINKS_WINDOW_SECONDS` | `60` |
+| `TRUST_PROXY` | unset / false |
 
 ---
 
@@ -630,7 +639,7 @@ Objetivo: terminar o dia com o núcleo funcional da aplicação funcionando.
 - [x] garantir unicidade no banco;
 - [x] implementar `expiresAt`;
 - [x] implementar `maxClicks`;
-- [ ] implementar rate limiting por IP.
+- [x] implementar rate limiting por IP.
 
 ### Redirect
 

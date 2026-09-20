@@ -39,6 +39,9 @@ services:
       REDIS_URL: redis://redis:6379
       SHORT_URL_BASE_URL: ${SHORT_URL_BASE_URL}
       ANALYTICS_ENQUEUE_TIMEOUT_MS: ${ANALYTICS_ENQUEUE_TIMEOUT_MS:-0}
+      RATE_LIMIT_POST_LINKS_MAX: ${RATE_LIMIT_POST_LINKS_MAX:-30}
+      RATE_LIMIT_POST_LINKS_WINDOW_SECONDS: ${RATE_LIMIT_POST_LINKS_WINDOW_SECONDS:-60}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
     depends_on:
       postgres:
         condition: service_healthy

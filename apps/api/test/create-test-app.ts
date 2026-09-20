@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module.js';
+import { applyTrustProxyFromEnv } from '../src/trust-proxy.js';
 
 export async function createTestApp(): Promise<{
   app: INestApplication<App>;
@@ -16,6 +17,7 @@ export async function createTestApp(): Promise<{
   }).compile();
 
   const app = moduleFixture.createNestApplication();
+  applyTrustProxyFromEnv(app);
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
