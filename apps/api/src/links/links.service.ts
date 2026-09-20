@@ -10,9 +10,11 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { LinkCacheService } from '../redirect/link-cache.service.js';
 import { CreateLinkDto } from './dto/create-link.dto.js';
 import {
+  buildShortUrl,
   LinkResponseDto,
   toLinkResponse,
 } from './dto/link-response.dto.js';
+import type { LinkListResponseDto } from './dto/link-list-response.dto.js';
 import type { LinkStatsResponseDto } from './dto/link-stats-response.dto.js';
 import { bigintToSafeNumber } from './bigint.util.js';
 import {
@@ -23,6 +25,9 @@ import {
   AUTO_SLUG_MAX_ATTEMPTS,
   generateBase62Slug,
 } from './slug.util.js';
+
+/** Max items returned by GET /links (UI listing support). */
+export const LINK_LIST_LIMIT = 50;
 
 @Injectable()
 export class LinksService {
@@ -55,6 +60,52 @@ export class LinksService {
       maxClicks,
       shortUrlBase,
     );
+  }
+
+  /**
+   * Recent links for the UI list (aux endpoint).
+   * ORDER BY createdAt DESC LIMIT 50. No Redis, no pagination params.
+   * clickCount ← Link.clickCount (never COUNT AccessEvent); eventual consistency accepted.
+   * Returns disabled / expired / maxed rows as-is (raw fields; no derived status).
+   */
+  async list(): Promise<LinkListResponseDto> {
+    const shortUrlBase = this.getShortUrlBase();
+    const rows = await this.prisma.link.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: LINK_LIST_LIMIT,
+      select: {
+        slug: true,
+        destinationUrl: true,
+        active: true,
+        expiresAt: true,
+        maxClicks: true,
+        clickCount: true,
+        createdAt: true,
+      },
+    });
+
+    try {
+      return {
+        items: rows.map((row) => ({
+          slug: row.slug,
+          shortUrl: buildShortUrl(shortUrlBase, row.slug),
+          url: row.destinationUrl,
+          active: row.active,
+          expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+          maxClicks:
+            row.maxClicks == null
+              ? null
+              : bigintToSafeNumber(row.maxClicks, 'Link.maxClicks'),
+          clickCount: bigintToSafeNumber(row.clickCount, 'Link.clickCount'),
+          createdAt: row.createdAt.toISOString(),
+        })),
+      };
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new InternalServerErrorException(error.message);
+      }
+      throw error;
+    }
   }
 
   /**

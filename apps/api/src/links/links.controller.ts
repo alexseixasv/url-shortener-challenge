@@ -12,6 +12,7 @@ import {
 import { CreateLinkDto } from './dto/create-link.dto.js';
 import { PatchLinkDto } from './dto/patch-link.dto.js';
 import { LinkResponseDto } from './dto/link-response.dto.js';
+import type { LinkListResponseDto } from './dto/link-list-response.dto.js';
 import type { LinkStatsResponseDto } from './dto/link-stats-response.dto.js';
 import { LinksService } from './links.service.js';
 import { PostLinksRateLimitGuard } from './post-links-rate-limit.guard.js';
@@ -25,6 +26,12 @@ export class LinksController {
   @HttpCode(HttpStatus.CREATED)
   create(@Body() dto: CreateLinkDto): Promise<LinkResponseDto> {
     return this.linksService.create(dto);
+  }
+
+  /** Collection list — declared before param routes for readability. */
+  @Get()
+  list(): Promise<LinkListResponseDto> {
+    return this.linksService.list();
   }
 
   @Get(':slug/stats')

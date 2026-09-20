@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { toLinkResponse } from './link-response.dto.js';
+import { buildShortUrl, toLinkResponse } from './link-response.dto.js';
+
+describe('buildShortUrl', () => {
+  it('strips trailing slashes from base', () => {
+    expect(buildShortUrl('http://localhost:3000/', 'Ab12Cd34')).toBe(
+      'http://localhost:3000/Ab12Cd34',
+    );
+  });
+});
 
 describe('toLinkResponse', () => {
   it('strips trailing slashes from SHORT_URL_BASE_URL', () => {

@@ -6,7 +6,7 @@ Antes de começar a implementação, preferi registrar minha leitura do problema
 
 Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a implementação revele algum trade-off que não esteja evidente neste momento.
 
-> **Status atual:** fundação, persistência, `POST /links` (rate limit por IP), `PATCH /links/:slug` (disable + invalidação de cache), `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. Stats HTTP e frontend ainda pendentes.
+> **Status atual:** fundação, persistência, `POST /links` (rate limit por IP), `GET /links` (lista auxiliar UI, 50 mais recentes), `PATCH /links/:slug` (disable + invalidação de cache), `GET /links/:slug/stats`, `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. Frontend ainda pendente.
 
 ---
 
@@ -311,6 +311,40 @@ De forma resumida:
     access_events
     + índice
     + LIMIT 20
+
+### `GET /links` (suporte à UI)
+
+Endpoint auxiliar para a listagem da interface web (o enunciado pede lista na UI; não exige este path na API). Leitura PostgreSQL apenas — **sem Redis**, sem paginação, sem query params.
+
+```http
+GET /links
+```
+
+```json
+{
+  "items": [
+    {
+      "slug": "abc123",
+      "shortUrl": "http://localhost:3000/abc123",
+      "url": "https://example.com",
+      "active": true,
+      "expiresAt": null,
+      "maxClicks": null,
+      "clickCount": 42,
+      "createdAt": "2026-09-20T16:00:00.000Z"
+    }
+  ]
+}
+```
+
+| Regra | Detalhe |
+| --- | --- |
+| Limite | **50** links mais recentes (`LIMIT 50`) |
+| Ordenação | `createdAt DESC` |
+| Vazio | `{ "items": [] }` |
+| `clickCount` | `links.click_count` (**nunca** `COUNT(AccessEvent)`); mesma consistência eventual do stats |
+| Estado | campos brutos (`active`, `expiresAt`, `maxClicks`, `clickCount`); a UI deriva inactive/expired/maxed |
+| Índice | **sem** índice em `createdAt` nesta unidade — endpoint auxiliar; revisitável se a tabela crescer e o Seq Scan degradar a UI |
 
 ### `GET /links/:slug/stats` (implementado)
 
