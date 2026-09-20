@@ -53,4 +53,13 @@ export class LinkCacheService {
       this.logger.warn(`cache set failed for ${slug}: ${message}`);
     }
   }
+
+  /**
+   * Required invalidation for disable. Errors propagate (no fail-open).
+   * Missing key is success.
+   */
+  async delete(slug: string): Promise<void> {
+    await this.redis.connect();
+    await this.redis.client.del(this.key(slug));
+  }
 }

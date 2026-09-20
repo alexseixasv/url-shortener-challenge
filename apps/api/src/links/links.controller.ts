@@ -3,10 +3,13 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
 import { CreateLinkDto } from './dto/create-link.dto.js';
+import { PatchLinkDto } from './dto/patch-link.dto.js';
 import { LinkResponseDto } from './dto/link-response.dto.js';
 import { LinksService } from './links.service.js';
 import { PostLinksRateLimitGuard } from './post-links-rate-limit.guard.js';
@@ -20,5 +23,14 @@ export class LinksController {
   @HttpCode(HttpStatus.CREATED)
   create(@Body() dto: CreateLinkDto): Promise<LinkResponseDto> {
     return this.linksService.create(dto);
+  }
+
+  @Patch(':slug')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async disable(
+    @Param('slug') slug: string,
+    @Body() _dto: PatchLinkDto,
+  ): Promise<void> {
+    await this.linksService.disable(slug);
   }
 }

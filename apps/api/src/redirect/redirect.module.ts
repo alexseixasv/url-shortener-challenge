@@ -10,6 +10,6 @@ import { RedirectService } from './redirect.service.js';
   imports: [PrismaModule, RedisModule, AnalyticsModule],
   controllers: [RedirectController],
   providers: [RedirectService, LinkCacheService],
-  exports: [RedirectService],
+  exports: [RedirectService, LinkCacheService],
 })
 export class RedirectModule {}

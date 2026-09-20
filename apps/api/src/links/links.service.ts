@@ -1,10 +1,12 @@
 import {
   ConflictException,
   Injectable,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { LinkCacheService } from '../redirect/link-cache.service.js';
 import { CreateLinkDto } from './dto/create-link.dto.js';
 import {
   LinkResponseDto,
@@ -20,7 +22,10 @@ export class LinksService {
   /** Overridable for tests (collision / retry scenarios). */
   slugGenerator: () => string = generateBase62Slug;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly linkCache: LinkCacheService,
+  ) {}
 
   async create(dto: CreateLinkDto): Promise<LinkResponseDto> {
     const shortUrlBase = this.getShortUrlBase();
@@ -43,6 +48,37 @@ export class LinksService {
       maxClicks,
       shortUrlBase,
     );
+  }
+
+  /**
+   * Monotonic disable: active true→false only. Never re-enables.
+   * PG update (or already false) then mandatory cache DEL.
+   * DEL failure → 503; PG stays false (no compensation).
+   */
+  async disable(slug: string): Promise<void> {
+    const updated = await this.prisma.link.updateMany({
+      where: { slug, active: true },
+      data: { active: false },
+    });
+
+    if (updated.count === 0) {
+      const existing = await this.prisma.link.findUnique({
+        where: { slug },
+        select: { id: true, active: true },
+      });
+      if (!existing) {
+        throw new NotFoundException();
+      }
+      // already inactive — still must invalidate cache
+    }
+
+    try {
+      await this.linkCache.delete(slug);
+    } catch {
+      throw new ServiceUnavailableException(
+        'unable to invalidate link cache',
+      );
+    }
   }
 
   private async createWithCustomSlug(

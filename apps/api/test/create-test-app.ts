@@ -1,12 +1,12 @@
 import { ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { App } from 'supertest/types';
+import type { Server } from 'node:http';
 import { AppModule } from '../src/app.module.js';
 import { applyTrustProxyFromEnv } from '../src/trust-proxy.js';
 
 export async function createTestApp(): Promise<{
-  app: INestApplication<App>;
+  app: INestApplication<Server>;
   moduleFixture: TestingModule;
 }> {
   process.env.SHORT_URL_BASE_URL ??= 'http://localhost:3000';

@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
+import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { createTestApp } from './create-test-app.js';
@@ -11,7 +11,7 @@ import { AUTO_SLUG_MAX_ATTEMPTS } from '../src/links/slug.util.js';
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 
 describe.runIf(hasDatabase)('POST /links (e2e)', () => {
-  let app: INestApplication<App>;
+  let app: INestApplication<Server>;
   let linksService: LinksService;
   let prisma: PrismaService;
 

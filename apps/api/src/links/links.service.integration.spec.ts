@@ -3,6 +3,8 @@ import { Test } from '@nestjs/testing';
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { LinkCacheService } from '../redirect/link-cache.service.js';
+import { RedisService } from '../redis/redis.service.js';
 import { LinksService } from './links.service.js';
 import { AUTO_SLUG_MAX_ATTEMPTS, generateBase62Slug } from './slug.util.js';
 
@@ -14,8 +16,9 @@ describe.runIf(hasDatabase)('LinksService (integration)', () => {
 
   beforeAll(async () => {
     process.env.SHORT_URL_BASE_URL ??= 'http://localhost:3000';
+    process.env.REDIS_URL ??= 'redis://localhost:6379';
     const moduleRef = await Test.createTestingModule({
-      providers: [PrismaService, LinksService],
+      providers: [PrismaService, RedisService, LinkCacheService, LinksService],
     }).compile();
     prisma = moduleRef.get(PrismaService);
     service = moduleRef.get(LinksService);

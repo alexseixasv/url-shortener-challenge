@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
+import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { createTestApp } from './create-test-app.js';
@@ -18,7 +18,7 @@ function uniqueClientIp(): string {
 }
 
 describe.runIf(hasDatabase && hasRedis)('POST /links rate limit (e2e)', () => {
-  let app: INestApplication<App>;
+  let app: INestApplication<Server>;
   let prisma: PrismaService;
   let redis: RedisService;
   let clientIp: string;
@@ -147,7 +147,7 @@ describe.runIf(hasDatabase && hasRedis)('POST /links rate limit (e2e)', () => {
 describe.runIf(hasDatabase && hasRedis)(
   'POST /links rate limit concurrency (e2e)',
   () => {
-    let app: INestApplication<App>;
+    let app: INestApplication<Server>;
     let redis: RedisService;
     let clientIp: string;
     const prevMax = process.env.RATE_LIMIT_POST_LINKS_MAX;

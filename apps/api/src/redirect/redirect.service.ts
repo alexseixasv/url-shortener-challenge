@@ -122,6 +122,32 @@ export class RedirectService {
       maxClicks: link.maxClicks == null ? null : link.maxClicks.toString(),
     };
 
+    // Re-check before set so a concurrent disable+DEL cannot be undone by
+    // re-warming stale active=true metadata after invalidation.
+    if (isLinkCurrentlyValid(meta)) {
+      const fresh = await this.prisma.link.findUnique({
+        where: { slug },
+        select: { active: true, expiresAt: true },
+      });
+      const stillValid =
+        fresh != null &&
+        isLinkCurrentlyValid({
+          active: fresh.active,
+          expiresAt: fresh.expiresAt
+            ? fresh.expiresAt.toISOString()
+            : null,
+        });
+      if (!stillValid) {
+        return {
+          ...meta,
+          active: fresh?.active ?? false,
+          expiresAt: fresh?.expiresAt
+            ? fresh.expiresAt.toISOString()
+            : null,
+        };
+      }
+    }
+
     await this.cache.set(slug, meta);
     return meta;
   }

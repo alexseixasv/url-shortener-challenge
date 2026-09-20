@@ -6,7 +6,7 @@ Antes de começar a implementação, preferi registrar minha leitura do problema
 
 Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a implementação revele algum trade-off que não esteja evidente neste momento.
 
-> **Status atual:** fundação, persistência, `POST /links` (com rate limit por IP), `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. `PATCH`, stats HTTP e frontend ainda pendentes.
+> **Status atual:** fundação, persistência, `POST /links` (rate limit por IP), `PATCH /links/:slug` (disable + invalidação de cache), `GET /:slug` (redirect + cache-aside + `maxClicks` no PostgreSQL) e analytics assíncrono (Redis Streams + worker) implementados. Stats HTTP e frontend ainda pendentes.
 
 ---
 
@@ -322,21 +322,30 @@ Se um link estiver armazenado no Redis e for desativado no PostgreSQL, não poss
 
 O requisito é que a desativação seja percebida imediatamente.
 
-Portanto, ao alterar um link:
+### `PATCH /links/:slug` (somente disable)
 
-    PATCH /links/:slug
-            |
-            v
-       PostgreSQL
-       active = false
-            |
-            v
-         Redis
-       DEL link:{slug}
+Body aceito: `{ "active": false }`. Sem reativação e sem editar `url` / `expiresAt` / `maxClicks`.
 
-A alteração persistente deve ser acompanhada da invalidação da entrada correspondente no cache.
+| Caso | Resposta |
+|------|----------|
+| Sucesso (1ª vez ou retry idempotente) | **204 No Content** |
+| Slug inexistente | **404** |
+| `active: true` / campos extras / body inválido | **400** |
+| Redis falha no `DEL` após PG `active=false` | **503** (PG permanece `false`; **sem** compensação) |
 
-Assim, a próxima tentativa de acesso não continuará utilizando uma versão antiga do link.
+Fluxo:
+
+```text
+UPDATE links SET active=false WHERE slug=? AND active=true
+DEL link:{slug}   # obrigatório antes do 204
+```
+
+- Disable é **monotônico** (`true → false` apenas). Nunca se escreve `active=true` de volta.
+- `PATCH 204` implica: PG disabled **e** a stale key foi removida → novos `GET /:slug` observam **410**.
+- `PATCH 503` **não** promete invalidação imediata; o retry do mesmo PATCH tenta `DEL` de novo e, com sucesso, retorna **204**.
+- GETs já em voo durante o PATCH podem ainda completar com 302.
+- TTL do cache **não** é mecanismo de correctness para disable.
+- Contrato de resposta de `POST /links` **não** muda (sem campo `active` no create).
 
 ---
 
@@ -649,7 +658,7 @@ Objetivo: terminar o dia com o núcleo funcional da aplicação funcionando.
 - [x] implementar redirect `302`;
 - [x] implementar cache-aside com Redis;
 - [x] tratar cache hit e cache miss;
-- [ ] implementar invalidação de cache;
+- [x] implementar invalidação de cache;
 - [x] tratar concorrência relacionada a `maxClicks`.
 
 ### Analytics
@@ -705,10 +714,10 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 
 ### Alteração de links
 
-- [ ] implementar `PATCH /links/:slug`;
-- [ ] permitir desativação;
-- [ ] invalidar imediatamente o cache correspondente;
-- [ ] validar o comportamento do redirect após a alteração.
+- [x] implementar `PATCH /links/:slug`;
+- [x] permitir desativação;
+- [x] invalidar imediatamente o cache correspondente;
+- [x] validar o comportamento do redirect após a alteração.
 
 ### Frontend
 
@@ -732,7 +741,7 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 - [x] redirect `302`;
 - [x] cache hit;
 - [x] cache miss;
-- [ ] invalidação de cache;
+- [x] invalidação de cache;
 - [x] processamento dos eventos de acesso;
 - [ ] estatísticas;
 - [x] pelo menos um fluxo E2E completo de redirecionamento.
