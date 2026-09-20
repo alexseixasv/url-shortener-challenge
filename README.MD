@@ -4,9 +4,7 @@ Implementação de um desafio técnico para construção de um encurtador de URL
 
 Antes de começar a implementação, preferi registrar minha leitura do problema, os pontos que considero mais críticos e as decisões iniciais de arquitetura.
 
-Algumas dessas decisões ainda podem mudar durante o desenvolvimento caso a implementação revele algum trade-off que não esteja evidente neste momento.
-
-> **Status atual:** backend completo para o challenge (`POST/GET/PATCH` links, redirect, stats, analytics Redis Streams, rate limit) e **frontend React** em `apps/web` (create / list / stats / disable) com identidade Kiip.
+> **Status atual:** backend completo para o challenge (`POST/GET/PATCH` links, redirect, stats, analytics Redis Streams, rate limit) e **frontend React** em `apps/web` (create / list / stats / disable) com identidade Kiip. System Design: [docs/architecture/system-design.md](docs/architecture/system-design.md).
 
 ---
 
@@ -46,7 +44,7 @@ Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgr
 ### Interface web
 
 - URL: http://localhost:5173 (porta `WEB_PORT`)
-- Identidade visual: [docs/design/kiip-ui.md](docs/design/kiip-ui.md) (referência de princípios: [docs/design/design-reference.md](docs/design/design-reference.md) — **não** copiar identidade Coinbase)
+- Identidade visual: [docs/design/kiip-ui.md](docs/design/kiip-ui.md)
 - Fluxo: criar link → short URL + Copy → lista dos 50 mais recentes → View stats → Disable
 - Endpoints consumidos: `POST /links`, `GET /links`, `GET /links/:slug/stats`, `PATCH /links/:slug`
 - Env: `VITE_API_BASE_URL` (browser → API), `CORS_ORIGIN` (API → origem do Vite)
@@ -111,22 +109,18 @@ Criar links é uma operação relativamente pouco frequente. Redirecioná-los é
 
 ---
 
-## Arquitetura inicial
+## Arquitetura
 
-A primeira versão será composta por:
+A aplicação é composta por:
 
-- **React** no frontend;
-- **NestJS** na API;
+- **React** no frontend (`apps/web`);
+- **NestJS** na API (`apps/api`);
 - **PostgreSQL + Prisma** para persistência;
 - **Redis** para cache-aside de metadata de links, fila de analytics (Streams) e rate limiting de `POST /links` — **não** como autoridade de `maxClicks` (ver ADR-002);
-- **processamento assíncrono** dos eventos de acesso;
+- **worker** Nest separado para processar eventos de acesso;
 - **Docker Compose** para subir o ambiente completo.
 
-A intenção é manter a solução proporcional ao problema.
-
-Não pretendo adicionar componentes de infraestrutura apenas para demonstrar escalabilidade. Se uma decisão puder ser resolvida de maneira mais simples dentro dos requisitos apresentados, vou preferir esse caminho.
-
-A implementação local deve representar a arquitetura proposta sem exigir serviços externos para funcionar.
+A solução permanece proporcional ao problema: sem componentes de infraestrutura só para demonstrar escala. Detalhes consolidados em [docs/architecture/system-design.md](docs/architecture/system-design.md).
 
 ---
 
@@ -213,7 +207,7 @@ O PostgreSQL continua sendo a fonte persistente dos dados.
 
 ## Por que 302?
 
-O redirecionamento será feito com `302 Found`.
+O redirecionamento é feito com `302 Found`.
 
 Neste caso, não quero que o navegador trate a associação entre o slug e a URL de destino como um redirecionamento permanente.
 
@@ -250,7 +244,7 @@ O usuário não precisa esperar um `INSERT` na tabela de acessos para ser redire
 
 Além da questão de latência, isso atende uma regra importante do problema: uma falha no processamento das estatísticas não pode impedir o usuário de chegar à URL de destino.
 
-O worker será responsável por consumir os eventos e persistir as informações necessárias no PostgreSQL.
+O worker é responsável por consumir os eventos e persistir as informações necessárias no PostgreSQL.
 
 **Mecanismo escolhido:** Redis Streams (`access_events`, consumer group `analytics-workers`) + worker Nest (`worker.main`). Enqueue no redirect é non-blocking por padrão; persistência idempotente por `eventId` UUID UNIQUE. Detalhes em ADR-003.
 
@@ -295,9 +289,7 @@ Cada evento deve guardar pelo menos:
 
 Essa tabela atende tanto ao histórico individual exigido quanto à consulta dos últimos acessos.
 
-Para buscar os últimos 20 registros sem percorrer todo o histórico, pretendo criar um índice considerando o link e a data do acesso.
-
-Algo próximo de:
+Para buscar os últimos 20 registros sem percorrer todo o histórico, existe um índice em:
 
     (link_id, accessed_at DESC)
 
@@ -305,7 +297,7 @@ Algo próximo de:
 
 Contadores agregados por link e por dia.
 
-Em vez de calcular a série dos últimos sete dias percorrendo toda a tabela de eventos, a API poderá consultar diretamente esses contadores.
+Em vez de calcular a série dos últimos sete dias percorrendo toda a tabela de eventos, a API consulta diretamente esses contadores.
 
 A intenção é que o custo do endpoint de estatísticas seja limitado independentemente de o link possuir mil ou 10 milhões de acessos.
 
@@ -478,7 +470,7 @@ Ver [ADR-002](docs/adr/002-maxclicks-postgresql-authority.md).
 
 ## Slugs
 
-Slugs personalizados usam o charset Base62 (`0-9`, `A-Z`, `a-z`), length 1–64, case-sensitive. O valor `links` é rejeitado para não conflitar com rotas `/links/*` quando `GET /:slug` existir. Tentativa de reutilizar um slug existente falha com `409` sem sobrescrever o link anterior — a constraint `UNIQUE` do PostgreSQL é a autoridade final.
+Slugs personalizados usam o charset Base62 (`0-9`, `A-Z`, `a-z`), length 1–64, case-sensitive. O valor `links` é rejeitado para não conflitar com rotas `/links/*`. Tentativa de reutilizar um slug existente falha com `409` sem sobrescrever o link anterior — a constraint `UNIQUE` do PostgreSQL é a autoridade final.
 
 ### Geração automática
 
@@ -517,26 +509,23 @@ Somente **`POST /links`** é limitado por IP. **`GET /:slug` não** entra no lim
 
 ---
 
-## Estrutura esperada do projeto
+## Estrutura do projeto
 
-A estrutura exata ainda pode mudar, mas a intenção inicial é manter frontend e backend no mesmo repositório.
-
-Algo próximo de:
+Monorepo com frontend e backend no mesmo repositório; analytics em processo worker separado (mesmo pacote `apps/api`, entry `worker.main`):
 
     .
     ├── apps/
     │   ├── api/
     │   └── web/
     │
-    ├── packages/
-    │
     ├── docs/
+    │   ├── adr/
+    │   ├── architecture/
+    │   └── design/
     │
     ├── docker-compose.yml
     ├── .env.example
-    └── README.md
-
-Também pretendo separar o processamento de analytics da API, mesmo que API e worker possam compartilhar tipos e outras partes do projeto.
+    └── README.MD
 
 ---
 
@@ -544,7 +533,7 @@ Também pretendo separar o processamento de analytics da API, mesmo que API e wo
 
 Os testes vão se concentrar principalmente nas regras que podem quebrar o comportamento do redirect.
 
-Entre os cenários que pretendo cobrir:
+Entre os cenários cobertos:
 
 - criação de link;
 - validação da URL;
@@ -586,7 +575,7 @@ Algumas coisas fariam sentido em uma infraestrutura de produção maior, mas nã
 - CI/CD;
 - arquitetura de microserviços.
 
-A aplicação será pensada para não impedir uma evolução futura nessa direção, mas não quero implementar complexidade que o desafio não pede.
+A aplicação foi pensada para não impedir uma evolução futura nessa direção, mas não quero implementar complexidade que o desafio não pede.
 
 Se fosse necessário evoluir essa arquitetura para um ambiente de produção com outra ordem de grandeza, alguns caminhos naturais seriam:
 
@@ -644,10 +633,9 @@ Para não reconstruir o mesmo contexto a cada prompt, decisões e aprendizados r
 | Camada | Papel |
 |--------|--------|
 | `README.MD` | requisitos, execução e visão do projeto |
-| `docs/architecture/` | arquitetura implementada |
+| `docs/architecture/` | arquitetura implementada ([system-design.md](docs/architecture/system-design.md)) |
 | `docs/adr/` | decisões arquiteturais e trade-offs |
-| `docs/design/kiip-ui.md` | UI real (cores, tipografia, componentes) |
-| `docs/design/design-reference.md` | referência de princípios visuais apenas |
+| `docs/design/kiip-ui.md` | design system da UI (cores, tipografia, componentes) |
 | `.cursor/rules/` | guardrails de implementação |
 | `.cursor/agents/` | especialistas de análise |
 
@@ -850,13 +838,13 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 
 ### Documentação
 
-- [ ] revisar este README;
-- [ ] atualizar decisões que tenham mudado durante a implementação;
+- [x] revisar este README;
+- [x] atualizar decisões que tenham mudado durante a implementação;
 - [x] documentar a estratégia final de geração de slugs;
 - [x] documentar a solução final para `maxClicks`;
 - [x] documentar o mecanismo escolhido para processamento assíncrono;
 - [x] atualizar a seção de uso de IA;
-- [ ] adicionar o System Design final;
+- [x] adicionar o System Design final;
 - [x] documentar como executar a aplicação;
 - [x] documentar como executar os testes.
 

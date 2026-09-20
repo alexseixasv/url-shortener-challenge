@@ -1,8 +1,6 @@
 # Kiip UI — URL Shortener Challenge
 
-Documentação da **UI real** implementada em `apps/web`.
-
-`docs/design/design-reference.md` é apenas uma referência de princípios visuais (whitespace, geometria, accent escasso). **Não** é a identidade da Kiip e não deve ser copiado (cores Coinbase, dark hero, trading UI, fontes proprietárias, marketing).
+Documentação do design system **real** usado em `apps/web` (identidade Kiip).
 
 ## Purpose
 
@@ -18,7 +16,7 @@ Prioridade: funcionalidade → clareza → acessibilidade → responsividade →
 ## Logo
 
 - Arquivo local: `apps/web/public/kiip-logo.svg`
-- Origem baixada uma vez do site Kiip; **sem** hotlink em runtime
+- Sem hotlink externo em runtime
 - Header: logo à esquerda (`alt="Kiip"`)
 
 ## Colors
@@ -62,11 +60,12 @@ Base 4px: 4 / 8 / 12 / 16 / 24 / 32 / 48. Gaps de seção ~48px.
 - Primary: bg primary, texto on-primary, altura ≥44px, pill
 - Secondary: surface-soft (Copy)
 - Ghost: borda hairline (Disable, Close)
-- Text: primary textual (View stats)
+- Text: primary textual (View stats / Hide stats)
 
 ## Inputs
 
-Altura 48px, radius 12px, borda `--color-border`, focus ring primary.
+Altura 48px, radius 12px, borda `--color-border`, focus ring primary.  
+Helper discreto no custom slug: “Letters and numbers only”.
 
 ## Cards / surfaces
 
@@ -78,7 +77,7 @@ Pill em surface-soft + texto do status (`Active` / `Inactive` / `Expired` / `Max
 
 ## List rows
 
-Lista semântica; short URL + clicks + badge; destination com `overflow-wrap: anywhere`; ações View stats / Disable.
+Lista semântica; short URL + clicks + badge; destination com `overflow-wrap: anywhere`; ações View stats / Hide stats / Disable.
 
 ## Stats
 

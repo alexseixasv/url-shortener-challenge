@@ -55,14 +55,14 @@ Adotar a alternativa 3:
 ### Positivas
 
 - Stats com custo limitado independentemente do volume de eventos.
-- Modelo alinhado ao fluxo assíncrono previsto no README (redirect não espera `INSERT` síncrono).
+- Modelo alinhado ao fluxo assíncrono (redirect não espera `INSERT` síncrono).
 - Separação clara entre fato (`AccessEvent`) e read models (`clickCount`, `DailyLinkStat`).
 
 ### Negativas
 
-- Consistência eventual entre eventos e agregados quando o processamento assíncrono for implementado.
-- Worker futuro precisa atualizar dois agregados (e inserir o evento) de forma correta.
-- Possível divergência temporária se o processamento falhar; exige estratégia de retry/reprocessamento (fora deste ADR).
+- Consistência eventual entre eventos e agregados enquanto o worker processa a fila.
+- O worker atualiza evento + agregados na mesma transação (ver ADR-003); falhas exigem retry/reclaim (coberto pelo consumer group / DLQ).
+- Possível divergência temporária visível em stats/`clickCount` até o processamento concluir.
 
 ## Status
 
@@ -70,4 +70,4 @@ Accepted.
 
 ## Fora deste ADR
 
-O mecanismo concreto de processamento assíncrono (fila, broker, worker) **não** é decidido aqui. A estratégia de concorrência de `maxClicks` no hot path também permanece aberta.
+O mecanismo concreto de fila/worker está em [ADR-003](./003-analytics-redis-streams.md). A concorrência de `maxClicks` no hot path está em [ADR-002](./002-maxclicks-postgresql-authority.md).
