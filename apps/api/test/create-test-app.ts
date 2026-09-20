@@ -11,6 +11,9 @@ export async function createTestApp(): Promise<{
 }> {
   process.env.SHORT_URL_BASE_URL ??= 'http://localhost:3000';
   process.env.REDIS_URL ??= 'redis://localhost:6379';
+  // Non–rate-limit e2e suites share one client IP; raise default so POST volume
+  // across files does not hit 429. Rate-limit specs set MAX explicitly first.
+  process.env.RATE_LIMIT_POST_LINKS_MAX ??= '10000';
 
   const moduleFixture = await Test.createTestingModule({
     imports: [AppModule],

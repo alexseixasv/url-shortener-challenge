@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -12,6 +13,12 @@ import {
   LinkResponseDto,
   toLinkResponse,
 } from './dto/link-response.dto.js';
+import type { LinkStatsResponseDto } from './dto/link-stats-response.dto.js';
+import { bigintToSafeNumber } from './bigint.util.js';
+import {
+  fillLast7Days,
+  utcLast7DaysWindow,
+} from './stats-window.util.js';
 import {
   AUTO_SLUG_MAX_ATTEMPTS,
   generateBase62Slug,
@@ -48,6 +55,67 @@ export class LinksService {
       maxClicks,
       shortUrlBase,
     );
+  }
+
+  /**
+   * Stats from PG only (no Redis, no cache).
+   * totalClicks ← Link.clickCount; last7Days ← DailyLinkStat (UTC window + zero-fill);
+   * recentAccesses ← AccessEvent ORDER BY accessedAt DESC LIMIT 20.
+   * Available for disabled / expired / maxed links; 404 only if slug missing.
+   * Eventual consistency with the worker is accepted as-is.
+   */
+  async getStats(
+    slug: string,
+    now: Date = new Date(),
+  ): Promise<LinkStatsResponseDto> {
+    const link = await this.prisma.link.findUnique({
+      where: { slug },
+      select: { id: true, slug: true, clickCount: true },
+    });
+    if (!link) {
+      throw new NotFoundException();
+    }
+
+    const window = utcLast7DaysWindow(now);
+
+    const [dailyRows, recentRows] = await Promise.all([
+      this.prisma.dailyLinkStat.findMany({
+        where: {
+          linkId: link.id,
+          date: { gte: window.start, lte: window.end },
+        },
+        select: { date: true, clickCount: true },
+      }),
+      this.prisma.accessEvent.findMany({
+        where: { linkId: link.id },
+        orderBy: { accessedAt: 'desc' },
+        take: 20,
+        select: { accessedAt: true, referer: true, userAgent: true },
+      }),
+    ]);
+
+    let totalClicks: number;
+    let last7Days: LinkStatsResponseDto['last7Days'];
+    try {
+      totalClicks = bigintToSafeNumber(link.clickCount, 'Link.clickCount');
+      last7Days = fillLast7Days(window, dailyRows, bigintToSafeNumber);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new InternalServerErrorException(error.message);
+      }
+      throw error;
+    }
+
+    return {
+      slug: link.slug,
+      totalClicks,
+      last7Days,
+      recentAccesses: recentRows.map((row) => ({
+        accessedAt: row.accessedAt.toISOString(),
+        referer: row.referer,
+        userAgent: row.userAgent,
+      })),
+    };
   }
 
   /**

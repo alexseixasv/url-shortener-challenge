@@ -312,6 +312,46 @@ De forma resumida:
     + índice
     + LIMIT 20
 
+### `GET /links/:slug/stats` (implementado)
+
+Leitura **somente PostgreSQL** (Redis não participa; sem cache de stats). Shape:
+
+1. `Link` por `slug` UNIQUE → `totalClicks` = `Link.clickCount` (**nunca** `COUNT(AccessEvent)`);
+2. após obter `linkId`, em paralelo (`Promise.all`):
+   - `DailyLinkStat` onde `linkId` + `date` entre o início e o fim da janela UTC → série `last7Days`;
+   - `AccessEvent` onde `linkId`, `ORDER BY accessedAt DESC LIMIT 20` → `recentAccesses`.
+
+**Contrato de resposta:**
+
+```json
+{
+  "slug": "abc123",
+  "totalClicks": 42,
+  "last7Days": [
+    { "date": "2026-09-14", "clicks": 0 },
+    { "date": "2026-09-15", "clicks": 3 }
+  ],
+  "recentAccesses": [
+    {
+      "accessedAt": "2026-09-19T10:00:00.000Z",
+      "referer": null,
+      "userAgent": "Mozilla/5.0"
+    }
+  ]
+}
+```
+
+| Campo | Origem | Notas |
+| --- | --- | --- |
+| `totalClicks` | `links.click_count` | `number`; conversão BigInt com rejeição se `> Number.MAX_SAFE_INTEGER` |
+| `last7Days` | `daily_link_stats` | **exatamente 7** entradas; **hoje UTC + 6 dias civis anteriores**; ordem **ASC**; dias ausentes **zero-fill na aplicação** |
+| `recentAccesses` | `access_events` | até **20** mais recentes; `referer` / `userAgent` preservam `null` |
+
+**Semântica de estado do link:** stats retornam **200** para links `disabled`, `expired` ou com `maxClicks` atingido. Somente slug inexistente → **404**.
+
+**Consistência eventual (ADR-001):** o worker assíncrono pode deixar `clickCount` (especialmente capped / preCounted) temporariamente à frente de `daily_link_stats` / `access_events`. Isso **não é tratado como erro** e **não** é sincronizado artificialmente na leitura.
+
+**Por que 10M+ eventos não tornam stats linear:** o total é um contador na linha do link; a série usa no máximo 7 linhas diárias (PK `(linkId, date)`); o histórico recente usa o índice `(linkId, accessedAt DESC)` com `LIMIT 20`. Nenhuma dessas queries faz full scan proporcional ao histórico.
 ---
 
 ## Cache e desativação
@@ -705,12 +745,12 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 
 ### Estatísticas
 
-- [ ] implementar `GET /links/:slug/stats`;
-- [ ] retornar total de acessos;
-- [ ] retornar série diária dos últimos sete dias;
-- [ ] retornar os últimos 20 acessos;
-- [ ] validar os índices utilizados pelas consultas;
-- [ ] garantir que as consultas não dependam de percorrer todo o histórico.
+- [x] implementar `GET /links/:slug/stats`;
+- [x] retornar total de acessos;
+- [x] retornar série diária dos últimos sete dias;
+- [x] retornar os últimos 20 acessos;
+- [x] validar os índices utilizados pelas consultas;
+- [x] garantir que as consultas não dependam de percorrer todo o histórico.
 
 ### Alteração de links
 
@@ -743,7 +783,7 @@ Objetivo: transformar o backend funcional em uma entrega completa.
 - [x] cache miss;
 - [x] invalidação de cache;
 - [x] processamento dos eventos de acesso;
-- [ ] estatísticas;
+- [x] estatísticas;
 - [x] pelo menos um fluxo E2E completo de redirecionamento.
 
 ### Documentação
