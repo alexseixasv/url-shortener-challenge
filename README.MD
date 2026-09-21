@@ -531,7 +531,7 @@ Monorepo com frontend e backend no mesmo repositório; analytics em processo wor
 
 ## Testes
 
-Os testes vão se concentrar principalmente nas regras que podem quebrar o comportamento do redirect.
+Os testes se concentram principalmente nas regras que podem quebrar o comportamento do redirect.
 
 Entre os cenários cobertos:
 
@@ -551,13 +551,29 @@ Entre os cenários cobertos:
 - processamento assíncrono dos eventos;
 - consulta das estatísticas.
 
-Também haverá pelo menos um fluxo de integração/E2E cobrindo o redirecionamento completo.
+Há fluxos de integração/E2E cobrindo o redirecionamento completo. O comando `test:e2e` da API é separado: não é incluído pelo script `test` da raiz (`pnpm test` / `pnpm -r run test`) nem pelo `pnpm test` da API.
 
-No final do desenvolvimento, quero validar a aplicação partindo de um ambiente limpo para garantir que dependências, banco e migrations sejam configurados a partir das instruções do repositório.
+A validação da aplicação parte de um ambiente limpo para garantir que dependências, banco e migrations sejam configurados a partir das instruções do repositório.
 
 O objetivo é que a solução possa ser iniciada com:
 
     docker compose up
+
+### Validação com Docker Compose
+
+Com a stack no ar (`docker compose up --build`):
+
+```bash
+docker compose exec api pnpm test
+docker compose exec api pnpm test:e2e
+docker compose exec web pnpm test
+
+docker compose exec api pnpm lint
+docker compose exec web pnpm lint
+
+docker compose exec api pnpm build
+docker compose exec web pnpm build
+```
 
 ---
 
@@ -860,24 +876,24 @@ A ideia é partir de um clone limpo do repositório e verificar se apenas as ins
 
 ### Checklist final
 
-- [ ] clonar o repositório em um diretório limpo;
-- [ ] configurar as variáveis de ambiente conforme `.env.example`;
-- [ ] executar `docker compose up`;
-- [ ] confirmar que as migrations são aplicadas corretamente;
-- [ ] confirmar que frontend, API, PostgreSQL, Redis e worker iniciam;
-- [ ] criar um link pela interface;
-- [ ] acessar o link curto;
-- [ ] confirmar o redirect `302`;
-- [ ] confirmar o registro do acesso;
-- [ ] consultar as estatísticas;
-- [ ] desativar o link;
-- [ ] confirmar que o próximo acesso retorna `410`;
-- [ ] executar toda a suíte de testes;
-- [ ] verificar se nenhum secret foi commitado;
-- [ ] revisar o histórico de commits;
-- [ ] revisar o README;
-- [ ] revisar o System Design;
-- [ ] conferir se consigo justificar as decisões implementadas.
+- [x] clonar o repositório em um diretório limpo;
+- [x] configurar as variáveis de ambiente conforme `.env.example`;
+- [x] executar `docker compose up`;
+- [x] confirmar que as migrations são aplicadas corretamente;
+- [x] confirmar que frontend, API, PostgreSQL, Redis e worker iniciam;
+- [x] criar um link pela interface;
+- [x] acessar o link curto;
+- [x] confirmar o redirect `302`;
+- [x] confirmar o registro do acesso;
+- [x] consultar as estatísticas;
+- [x] desativar o link;
+- [x] confirmar que o próximo acesso retorna `410`;
+- [x] executar toda a suíte de testes;
+- [x] verificar se nenhum secret foi commitado;
+- [x] revisar o histórico de commits;
+- [x] revisar o README;
+- [x] revisar o System Design;
+- [x] conferir se consigo justificar as decisões implementadas.
 
 Somente depois dessa validação o repositório será compartilhado para avaliação.
 
