@@ -28,7 +28,7 @@ describe.runIf(hasDatabase && hasRedis)('GET /links (e2e)', () => {
     return `${prefix}${randomBytes(4).toString('hex')}`;
   }
 
-  it('retorna items array; 1 link com contrato correto', async () => {
+  it('returns an items array; 1 link with the correct contract', async () => {
     await prisma.$executeRaw`
       UPDATE links
       SET "clickCount" = 0
@@ -64,7 +64,7 @@ describe.runIf(hasDatabase && hasRedis)('GET /links (e2e)', () => {
     expect(item).not.toHaveProperty('id');
   });
 
-  it('ordem createdAt DESC e LIMIT 50; stats/patch routes intactas', async () => {
+  it('createdAt DESC order and LIMIT 50; stats/patch routes intact', async () => {
     const cutoff = new Date('2090-01-01T00:00:00.000Z');
     await prisma.accessEvent.deleteMany({
       where: { link: { createdAt: { gte: cutoff } } },

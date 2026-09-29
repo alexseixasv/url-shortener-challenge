@@ -148,7 +148,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Header>URL Shortener Challenge</Header>
+      <Header>URL Shortener</Header>
       <Intro />
       <CreateLinkForm onCreated={(link) => void handleCreated(link)} />
       {created ? <CreatedLinkResult link={created} /> : null}

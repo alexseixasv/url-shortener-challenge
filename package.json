@@ -1,5 +1,5 @@
 {
-  "name": "kiip-url-shortener-challenge",
+  "name": "url-shortener",
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {

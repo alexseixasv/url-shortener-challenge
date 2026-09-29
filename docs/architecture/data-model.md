@@ -1,46 +1,46 @@
 # Data model
 
-Modelo persistente inicial (PostgreSQL / Prisma). Agregação de stats: ver [ADR-001](../adr/001-access-stats-aggregation.md).
+Persistent model (PostgreSQL / Prisma). Stats aggregation: see [ADR-001](../adr/001-access-stats-aggregation.md).
 
-## Entidades
+## Entities
 
 ### Link (`links`)
 
-| Campo | Tipo | Notas |
+| Field | Type | Notes |
 |-------|------|-------|
 | id | UUID PK | |
 | slug | VARCHAR(64) UNIQUE | |
 | destinationUrl | TEXT | |
 | active | BOOLEAN DEFAULT true | |
 | expiresAt | TIMESTAMPTZ NULL | |
-| maxClicks | BIGINT NULL | mesmo domínio que clickCount |
-| clickCount | BIGINT DEFAULT 0 | total lifetime (read model) |
+| maxClicks | BIGINT NULL | same domain as clickCount |
+| clickCount | BIGINT DEFAULT 0 | lifetime total (read model) |
 | createdAt / updatedAt | TIMESTAMPTZ | |
 
 ### AccessEvent (`access_events`)
 
-| Campo | Tipo | Notas |
+| Field | Type | Notes |
 |-------|------|-------|
 | id | BIGSERIAL PK | |
-| eventId | UUID UNIQUE | idempotência do worker (ADR-003) |
+| eventId | UUID UNIQUE | worker idempotency (ADR-003) |
 | linkId | UUID FK → links | ON DELETE RESTRICT |
-| accessedAt | TIMESTAMPTZ | instante do redirect |
-| referer / userAgent | TEXT NULL | truncados (máx. 2048) |
+| accessedAt | TIMESTAMPTZ | redirect instant |
+| referer / userAgent | TEXT NULL | truncated (max 2048) |
 
-Índice: `(link_id, accessed_at DESC)` — últimos 20 acessos.  
-Agregação: [ADR-001](../adr/001-access-stats-aggregation.md). Autoridade `maxClicks`: [ADR-002](../adr/002-maxclicks-postgresql-authority.md). Analytics: [ADR-003](../adr/003-analytics-redis-streams.md).
+Index: `(link_id, accessed_at DESC)` — last 20 accesses.  
+Aggregation: [ADR-001](../adr/001-access-stats-aggregation.md). `maxClicks` authority: [ADR-002](../adr/002-maxclicks-postgresql-authority.md). Analytics: [ADR-003](../adr/003-analytics-redis-streams.md).
 
 ### DailyLinkStat (`daily_link_stats`)
 
-| Campo | Tipo | Notas |
+| Field | Type | Notes |
 |-------|------|-------|
-| linkId | UUID | PK composta + FK RESTRICT |
-| date | DATE | dia civil **UTC** |
+| linkId | UUID | composite PK + FK RESTRICT |
+| date | DATE | **UTC** civil day |
 | clickCount | BIGINT DEFAULT 0 | |
 
 PK: `(link_id, date)`.
 
-## Diagrama
+## Diagram
 
 ```mermaid
 erDiagram

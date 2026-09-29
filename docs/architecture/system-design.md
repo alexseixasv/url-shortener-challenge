@@ -1,6 +1,6 @@
 # System Design
 
-Arquitetura **realmente implementada** neste repositório. Detalhes de contrato e trade-offs longos ficam no [README](../../README.MD) e nos [ADRs](../adr/).
+Architecture **actually implemented** in this repository. Contract details and longer trade-offs live in the [README](../../README.MD) and the [ADRs](../adr/).
 
 ## Overview
 
@@ -24,107 +24,107 @@ flowchart LR
   Worker --> PG
 ```
 
-PostgreSQL (fonte de verdade):
+PostgreSQL (source of truth):
 
 - `links` — metadata + `clickCount`
-- `access_events` — fatos individuais (`eventId` UNIQUE)
-- `daily_link_stats` — agregados diários por link
+- `access_events` — individual facts (`eventId` UNIQUE)
+- `daily_link_stats` — daily aggregates per link
 
 Redis:
 
-- cache-aside `link:{slug}` (metadata **sem** `clickCount`)
+- cache-aside `link:{slug}` (metadata **without** `clickCount`)
 - Stream `access_events` + consumer group `analytics-workers`
-- rate limit `POST /links`
+- rate limit for `POST /links`
 
-Processos Compose: `web`, `api`, `worker`, `postgres`, `redis`.
+Compose processes: `web`, `api`, `worker`, `postgres`, `redis`.
 
 ## Critical Path
 
-`GET /:slug` é o hot path:
+`GET /:slug` is the hot path:
 
-1. Lookup cache Redis (miss → PostgreSQL → set cache).
-2. Validar `active` / `expiresAt` / existência.
-3. **Unlimited:** autorizar sem write síncrono de contador; enqueue analytics; `302`.
-4. **Capped:** `UPDATE` atômico no PostgreSQL; sucesso → enqueue com `preCounted`; senão `410`.
-5. Resposta `302 Found` (nunca permanente).
+1. Redis cache lookup (miss → PostgreSQL → set cache).
+2. Validate `active` / `expiresAt` / existence.
+3. **Unlimited:** authorize without a synchronous counter write; enqueue analytics; `302`.
+4. **Capped:** atomic `UPDATE` in PostgreSQL; success → enqueue with `preCounted`; otherwise `410`.
+5. Response `302 Found` (never permanent).
 
-O redirect **não espera** persistência de analytics.
+The redirect **does not wait** for analytics persistence.
 
 ## Cache Strategy
 
-- Cache-aside de metadata para reduzir pressão no PG em links quentes.
-- PostgreSQL permanece source of truth de metadata e de `maxClicks` / `clickCount`.
-- `PATCH` disable: atualiza PG e **DEL** obrigatório da key (invalidação imediata).
-- TTL auxilia performance; **não** é mecanismo de correctness para disable.
+- Metadata cache-aside to reduce pressure on PostgreSQL for hot links.
+- PostgreSQL remains the source of truth for metadata and for `maxClicks` / `clickCount`.
+- `PATCH` disable: update PostgreSQL and **DEL** the key (immediate invalidation).
+- TTL helps performance; it is **not** the correctness mechanism for disable.
 
 ## maxClicks
 
-Ver [ADR-002](../adr/002-maxclicks-postgresql-authority.md).
+See [ADR-002](../adr/002-maxclicks-postgresql-authority.md).
 
-- Links capped: enforcement exclusivo no PostgreSQL (`clickCount < maxClicks` + active/expiry).
-- Redis **não** é autoridade de limite.
-- Unlimited: sem esse `UPDATE` no hot path; worker incrementa `clickCount` após o evento.
+- Capped links: enforcement only in PostgreSQL (`clickCount < maxClicks` + active/expiry).
+- Redis is **not** the limit authority.
+- Unlimited: no such `UPDATE` on the hot path; the worker increments `clickCount` after the event.
 
 ## Analytics
 
-Ver [ADR-003](../adr/003-analytics-redis-streams.md) e [ADR-001](../adr/001-access-stats-aggregation.md).
+See [ADR-003](../adr/003-analytics-redis-streams.md) and [ADR-001](../adr/001-access-stats-aggregation.md).
 
-- Redirect publica no Stream (best-effort, non-blocking por padrão).
-- Worker: consumer group → transação idempotente (`eventId`) → `AccessEvent` + `DailyLinkStat` (+ `clickCount` se não `preCounted`) → **ACK após COMMIT**.
-- At-least-once pós-aceite; dedup por `eventId`.
-- Poison → DLQ após tentativas máximas.
-- Stats e totais podem refletir **consistência eventual** enquanto o worker processa.
+- The redirect publishes to the Stream (best-effort, non-blocking by default).
+- Worker: consumer group → idempotent transaction (`eventId`) → `AccessEvent` + `DailyLinkStat` (+ `clickCount` when not `preCounted`) → **ACK after COMMIT**.
+- At-least-once after acceptance; dedup by `eventId`.
+- Poison → DLQ after the maximum number of attempts.
+- Stats and totals can reflect **eventual consistency** while the worker catches up.
 
 ## Statistics
 
-`GET /links/:slug/stats` (somente PG, sem Redis):
+`GET /links/:slug/stats` (PostgreSQL only, no Redis):
 
-1. `Link` por slug → `totalClicks` = `clickCount` (nunca `COUNT(AccessEvent)`).
-2. `DailyLinkStat` na janela UTC de 7 dias + zero-fill.
+1. `Link` by slug → `totalClicks` = `clickCount` (never `COUNT(AccessEvent)`).
+2. `DailyLinkStat` in the 7-day UTC window + zero-fill.
 3. `AccessEvent` `ORDER BY accessedAt DESC LIMIT 20`.
 
-`GET /links` lista os 50 mais recentes (`createdAt DESC`) para a UI.
+`GET /links` lists the 50 most recent links (`createdAt DESC`) for the UI.
 
 ## Rate Limiting
 
-Somente `POST /links`, fixed window no Redis por IP. Redis down → **fail-open** na criação. `GET /:slug` não é limitado.
+Only `POST /links`, fixed window in Redis per IP. Redis down → **fail-open** on create. `GET /:slug` is not limited.
 
 ## Failure Behavior
 
 ### Cache failure
 
-Redis indisponível para leitura/escrita de **metadata** (`link:{slug}`):
+Redis unavailable for **metadata** reads/writes (`link:{slug}`):
 
-- a API faz **fallback para PostgreSQL** quando aplicável (miss/erro de cache não inventa autoridade);
-- PostgreSQL continua sendo a **source of truth** de metadata e regras de disponibilidade.
+- the API **falls back to PostgreSQL** when applicable (a cache miss or cache error does not invent a second authority);
+- PostgreSQL remains the **source of truth** for metadata and availability rules.
 
-Disable ainda exige invalidação Redis quando possível; falha de `DEL` após PG `active=false` → `503` (retry sem reativar).
+Disable still requires Redis invalidation when possible; a `DEL` failure after PostgreSQL `active=false` → `503` (retry does not re-enable).
 
 ### Analytics enqueue failure
 
-Falha ao publicar o access event no Redis Stream:
+Failure to publish the access event to the Redis Stream:
 
-- **não impede o redirect** — o `302` permanece prioritário;
-- decisão consciente: logging/analytics não podem comprometer latência/disponibilidade do hot path (requisito do desafio).
+- **does not block the redirect** — the `302` stays the priority path;
+- conscious decision: logging/analytics must not compromise hot-path latency or availability.
 
-Eventos **aceitos** pelo Stream:
+Events **accepted** by the Stream:
 
-- processamento assíncrono pelo worker (consumer group);
-- `eventId` garante idempotência no PostgreSQL;
-- ACK ocorre **depois** do commit da TX;
-- leituras de stats/`clickCount` podem ficar temporariamente atrás (eventual consistency).
+- asynchronous processing by the worker (consumer group);
+- `eventId` provides idempotency in PostgreSQL;
+- ACK happens **after** the transaction commit;
+- stats / `clickCount` reads can lag temporarily (eventual consistency).
 
-Worker down: stream acumula; redirects continuam.
+Worker down: the stream accumulates; redirects continue.
 
 ## Trade-offs
 
-- Sem autenticação: `GET /links` é lista global dos 50 mais recentes.
-- Agregados denormalizados vs risco de divergência temporária (aceitável; ADR-001).
-- Índice em `AccessEvent (linkId, accessedAt DESC)` para LIMIT 20; sem índice em `createdAt` na listagem auxiliar (Seq Scan + LIMIT 50, revisitável se a tabela crescer).
-- Rate limit fail-open: proteção, não fonte de verdade.
+- No authentication: `GET /links` is a global list of the 50 most recent links.
+- Denormalized aggregates versus temporary divergence (acceptable; ADR-001).
+- Index on `AccessEvent (linkId, accessedAt DESC)` for LIMIT 20; no `createdAt` index on the auxiliary listing (Seq Scan + LIMIT 50, revisit if the table grows).
+- Rate limit fail-open: protection, not the source of truth.
 
 ## Out of Scope / Possible Evolution
 
-**Não implementado** (e não necessário para o desafio): Kubernetes, cloud gerenciada, réplicas, cluster Redis/PG, CDN, autenticação, CI/CD, microserviços, Kafka.
+**Not implemented** (and not required here): Kubernetes, managed cloud, replicas, Redis/PostgreSQL clusters, CDN, authentication, CI/CD, microservices, Kafka.
 
-Possíveis evoluções futuras (fora desta entrega): HA, multi-instância API, retenção/arquivamento de eventos, observabilidade avançada. A aplicação atual não depende desses componentes.
+Possible later evolution (outside this delivery): HA, multiple API instances, event retention/archival, advanced observability. The current application does not depend on those components.

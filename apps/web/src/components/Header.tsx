@@ -9,8 +9,8 @@ export function Header({ children }: Props) {
     <header className="app-header">
       <img
         className="app-header__logo"
-        src="/kiip-logo.svg"
-        alt="Kiip"
+        src="/logo.svg"
+        alt="URL Shortener"
         width={80}
         height={40}
       />

@@ -1,12 +1,12 @@
 # Architecture
 
-Documentação da arquitetura **implementada**.
+Documentation of the **implemented** architecture.
 
-| Documento | Conteúdo |
-|-----------|----------|
-| [system-design.md](./system-design.md) | System Design final (componentes, fluxos, falhas, trade-offs) |
-| [data-model.md](./data-model.md) | Modelo PostgreSQL / Prisma |
+| Document | Contents |
+|----------|----------|
+| [system-design.md](./system-design.md) | Final system design (components, flows, failures, trade-offs) |
+| [data-model.md](./data-model.md) | PostgreSQL / Prisma model |
 
-Decisões arquiteturais com trade-offs: [docs/adr/](../adr/).
+Architectural decisions and trade-offs: [docs/adr/](../adr/).
 
-UI entregue: [docs/design/kiip-ui.md](../design/kiip-ui.md).
+Delivered UI: [docs/design/ui.md](../design/ui.md).

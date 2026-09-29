@@ -1,33 +1,33 @@
 # Architecture Decision Records (ADRs)
 
-Registre aqui decisões com trade-offs relevantes para outro engenheiro entender o projeto.
+Record decisions with trade-offs that another engineer needs in order to understand the project.
 
-## Quando criar um ADR
+## When to write an ADR
 
-Crie um ADR quando a decisão:
+Write an ADR when the decision:
 
-- envolve alternativas com consequências duradouras;
-- afeta latência, concorrência, persistência, cache ou contratos;
-- provavelmente precisaria ser explicada fora do código.
+- involves alternatives with lasting consequences;
+- affects latency, concurrency, persistence, cache, or contracts;
+- would probably need to be explained outside the code.
 
-Não crie ADR para detalhes triviais de implementação.
+Do not write an ADR for trivial implementation details.
 
-## Formato
+## Format
 
 ```text
-# ADR-NNN: Título
+# ADR-NNN: Title
 
-## Contexto
+## Context
 
-## Alternativas consideradas
+## Alternatives considered
 
-## Decisão
+## Decision
 
-## Consequências
+## Consequences
 
 ## Status
 ```
 
-## Evolução
+## Evolution
 
-Decisões podem ser substituídas por ADRs posteriores. Prefira registrar a mudança (status `superseded` / novo ADR) em vez de apagar o raciocínio anterior.
+Decisions can be replaced by later ADRs. Prefer recording the change (status `superseded` / new ADR) instead of deleting the previous reasoning.

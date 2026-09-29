@@ -52,13 +52,13 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     });
   }
 
-  it('slug inexistente → NotFoundException', async () => {
+  it('missing slug → NotFoundException', async () => {
     await expect(links.getStats(uniqueSlug('miss'))).rejects.toBeInstanceOf(
       NotFoundException,
     );
   });
 
-  it('link sem acessos: zeros e recentAccesses vazio', async () => {
+  it('link with no accesses: zeros and empty recentAccesses', async () => {
     const slug = uniqueSlug('empty');
     await links.create({ url: 'https://example.com/empty', slug });
     const stats = await links.getStats(slug);
@@ -69,7 +69,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     expect(stats.recentAccesses).toEqual([]);
   });
 
-  it('last7Days: 7 dias UTC ASC, zero-fill, fora da janela excluído', async () => {
+  it('last7Days: 7 UTC days ASC, zero-fill, outside the window excluded', async () => {
     const slug = uniqueSlug('sparse');
     const created = await links.create({
       url: 'https://example.com/sparse',
@@ -122,7 +122,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     expect(created.slug).toBe(slug);
   });
 
-  it('totalClicks vem de Link.clickCount mesmo com AccessEvent divergente', async () => {
+  it('totalClicks comes from Link.clickCount even when AccessEvent diverges', async () => {
     const slug = uniqueSlug('div');
     await links.create({ url: 'https://example.com/div', slug });
     const link = await prisma.link.findUniqueOrThrow({ where: { slug } });
@@ -142,7 +142,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     ).toBe(0);
   });
 
-  it('1 recent access; null referer/userAgent preservados', async () => {
+  it('1 recent access; null referer/userAgent preserved', async () => {
     const slug = uniqueSlug('one');
     await links.create({ url: 'https://example.com/one', slug });
     const link = await prisma.link.findUniqueOrThrow({ where: { slug } });
@@ -158,7 +158,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     });
   });
 
-  it('exatamente 20 recent accesses', async () => {
+  it('exactly 20 recent accesses', async () => {
     const slug = uniqueSlug('ex20');
     await links.create({ url: 'https://example.com/ex20', slug });
     const link = await prisma.link.findUniqueOrThrow({ where: { slug } });
@@ -174,7 +174,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     expect(stats.recentAccesses[19].referer).toBe('e-0');
   });
 
-  it('mais de 20 → só 20; ORDER BY accessedAt DESC', async () => {
+  it('more than 20 → only 20; ORDER BY accessedAt DESC', async () => {
     const slug = uniqueSlug('lim20');
     await links.create({ url: 'https://example.com/lim20', slug });
     const link = await prisma.link.findUniqueOrThrow({ where: { slug } });
@@ -198,7 +198,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     }
   });
 
-  it('disabled / expired / maxed → stats 200 (sem throw)', async () => {
+  it('disabled / expired / maxed → stats 200 (no throw)', async () => {
     const slugDis = uniqueSlug('stdis');
     await links.create({ url: 'https://example.com/stdis', slug: slugDis });
     await prisma.link.update({
@@ -240,7 +240,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     expect(stats.totalClicks).toBe(1);
   });
 
-  it('BigInt serializa; boundary > MAX_SAFE_INTEGER não perde precisão silenciosamente', async () => {
+  it('BigInt serializes; boundary > MAX_SAFE_INTEGER does not lose precision silently', async () => {
     const slugOk = uniqueSlug('bisafe');
     await links.create({ url: 'https://example.com/bisafe', slug: slugOk });
     const ok = await prisma.link.findUniqueOrThrow({ where: { slug: slugOk } });
@@ -266,7 +266,7 @@ describe.runIf(hasDatabase)('LinksService.getStats (integration)', () => {
     );
   });
 
-  it('janela UTC: hoje UTC + 6 anteriores (instante fixo via daily rows)', async () => {
+  it('UTC window: today UTC + 6 previous days (fixed instant via daily rows)', async () => {
     const slug = uniqueSlug('utc');
     await links.create({ url: 'https://example.com/utc', slug });
     const link = await prisma.link.findUniqueOrThrow({ where: { slug } });

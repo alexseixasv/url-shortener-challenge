@@ -1,84 +1,87 @@
-# Encurtador de URLs
+# URL Shortener
 
-Implementação de um desafio técnico para construção de um encurtador de URLs com estatísticas de acesso.
+A URL shortener with access statistics.
 
-Antes de começar a implementação, preferi registrar minha leitura do problema, os pontos que considero mais críticos e as decisões iniciais de arquitetura.
+Before implementation, I wrote down how I read the problem, the points I consider most critical, and the initial architecture decisions.
 
-> **Status atual:** backend completo para o challenge (`POST/GET/PATCH` links, redirect, stats, analytics Redis Streams, rate limit) e **frontend React** em `apps/web` (create / list / stats / disable) com identidade Kiip. System Design: [docs/architecture/system-design.md](docs/architecture/system-design.md).
+> **Current status:** backend complete (`POST/GET/PATCH` links, redirect, stats, Redis Streams analytics, rate limit) and a **React frontend** in `apps/web` (create / list / stats / disable). System design: [docs/architecture/system-design.md](docs/architecture/system-design.md).
 
 ---
 
-## Ambiente local
+## Local environment
 
-Com Docker instalado:
+With Docker installed:
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Isso sobe PostgreSQL, Redis, API, **worker** e Web. A API e o worker esperam Postgres/Redis healthy, aplicam as migrations versionadas com `prisma migrate deploy` e só então iniciam. Não é necessário entrar no container para `pnpm install`, `migrate`, criar consumer group ou `db push`.
+This starts PostgreSQL, Redis, the API, the **worker**, and the web app. The API and the worker wait until Postgres and Redis are healthy, apply the versioned migrations with `prisma migrate deploy`, and only then start. You do not need to enter the container for `pnpm install`, `migrate`, consumer-group creation, or `db push`.
 
-`prisma generate` ocorre no **build** da imagem (Dockerfile), não a cada restart.
+`prisma generate` runs at **image build** time (Dockerfile), not on every restart.
 
-Se você alterar `apps/api/package.json` depois de já ter um volume `api_node_modules` antigo, recrie só esse volume para ele refletir o lockfile novo (o volume `postgres_data` pode ser preservado):
+If you change `apps/api/package.json` after an old `api_node_modules` volume already exists, recreate only that volume so it matches the new lockfile (the `postgres_data` volume can stay):
 
 ```bash
 docker compose stop api worker
-docker volume rm kiip-url-shortener-challenge_api_node_modules
+docker volume ls
+docker volume rm <compose-project>_api_node_modules
 docker compose up -d --build api worker
 ```
 
-Serviços no host (portas padrão do `.env.example`):
+`<compose-project>` is the Compose project name (by default, the directory name). Remove only the volume that ends in `_api_node_modules`.
 
-| Serviço | URL / endereço |
+Services on the host (default ports from `.env.example`):
+
+| Service | URL / address |
 |---------|----------------|
 | API | http://localhost:3000 |
 | Web | http://localhost:5173 |
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:6379` |
-| Worker | processo interno (sem porta publicada) |
+| Worker | internal process (no published port) |
 
-Dentro da rede do Compose, os hostnames dos serviços são `api`, `web`, `postgres`, `redis` e `worker`.
+Inside the Compose network, service hostnames are `api`, `web`, `postgres`, `redis`, and `worker`.
 
-### Interface web
+### Web UI
 
-- URL: http://localhost:5173 (porta `WEB_PORT`)
-- Identidade visual: [docs/design/kiip-ui.md](docs/design/kiip-ui.md)
-- Fluxo: criar link → short URL + Copy → lista dos 50 mais recentes → View stats → Disable
-- Endpoints consumidos: `POST /links`, `GET /links`, `GET /links/:slug/stats`, `PATCH /links/:slug`
-- Env: `VITE_API_BASE_URL` (browser → API), `CORS_ORIGIN` (API → origem do Vite)
+- URL: http://localhost:5173 (port `WEB_PORT`)
+- Visual identity: [docs/design/ui.md](docs/design/ui.md)
+- Flow: create link → short URL + Copy → list of the 50 most recent → View stats → Disable
+- Endpoints used: `POST /links`, `GET /links`, `GET /links/:slug/stats`, `PATCH /links/:slug`
+- Env: `VITE_API_BASE_URL` (browser → API), `CORS_ORIGIN` (API → Vite origin)
 
-Testes do frontend (Vitest, lógica pura / client HTTP):
+Frontend tests (Vitest, pure logic / HTTP client):
 
 ```bash
 pnpm --filter web test
 ```
 
-A API utiliza PostgreSQL via `DATABASE_URL` e Redis via `REDIS_URL`. No host (Prisma CLI / ferramentas locais), use `localhost`; no Compose, os hosts são `postgres` e `redis`.
+The API uses PostgreSQL via `DATABASE_URL` and Redis via `REDIS_URL`. On the host (Prisma CLI / local tools), use `localhost`; in Compose, the hosts are `postgres` and `redis`.
 
-`SHORT_URL_BASE_URL` é a base pública usada para montar `shortUrl` em `POST /links` e `GET /links` (ex.: `http://localhost:3000`). Não confundir com `API_PORT` / `PORT` (porta de listen). Sem trailing slash.
+`SHORT_URL_BASE_URL` is the public base used to build `shortUrl` on `POST /links` and `GET /links` (example: `http://localhost:3000`). Do not confuse it with `API_PORT` / `PORT` (listen port). No trailing slash.
 
-`VITE_API_BASE_URL` é a URL que o **browser** usa para chamar a API. Deve ser resolvível no host — **não** use `http://api:3000`. No Compose, se a variável estiver ausente, o default é `http://localhost:${API_PORT}`.
+`VITE_API_BASE_URL` is the URL the **browser** uses to call the API. It must resolve on the host — do not use `http://api:3000`. In Compose, if the variable is absent, the default is `http://localhost:${API_PORT}`.
 
-`CORS_ORIGIN` é a origem exata do frontend permitida pela API. No Compose, se a variável estiver ausente, o default é `http://localhost:${WEB_PORT}` (sem wildcard). Defina `CORS_ORIGIN` explicitamente só para sobrescrever.
+`CORS_ORIGIN` is the exact frontend origin allowed by the API. In Compose, if the variable is absent, the default is `http://localhost:${WEB_PORT}` (no wildcard). Set `CORS_ORIGIN` explicitly only to override.
 
 ### Redirect (`GET /:slug`)
 
-Fluxo (ADR-002 / ADR-003):
+Flow (ADR-002 / ADR-003):
 
-1. **Cache-aside** `link:{slug}` no Redis (metadata: `id`, `destinationUrl`, `active`, `expiresAt`, `maxClicks` — **sem** `clickCount`).
-2. Miss → PostgreSQL → popula cache (TTL `min(3600, expiresAt - now)` ou 3600; não cacheia link já expirado/inválido como válido).
-3. Validação `active` / `expiresAt` → `410` se indisponível; slug inexistente → `404`.
-4. **Unlimited** (`maxClicks` null): autoriza sem `UPDATE` síncrono; publica analytics best-effort; `302`.
-5. **Capped**: autoridade exclusiva no PostgreSQL via `UPDATE` condicional atômico (`clickCount < maxClicks` + active/expiry). 1 row → `302` + evento `preCounted=true`; 0 rows → `410`. Falha de PG no gate → `5xx` (nunca fail-open).
-6. Analytics: Redis Streams (`access_events`, group `analytics-workers`), `eventId` UUID UNIQUE, enqueue **non-blocking** por padrão (`ANALYTICS_ENQUEUE_TIMEOUT_MS=0`). Worker: `XREADGROUP` → TX idempotente → `XACK` só após `COMMIT`; reclaim via `XAUTOCLAIM`; poison → DLQ `access_events:dlq` após `ANALYTICS_MAX_ATTEMPTS` (default 5).
+1. **Cache-aside** `link:{slug}` in Redis (metadata: `id`, `destinationUrl`, `active`, `expiresAt`, `maxClicks` — **without** `clickCount`).
+2. Miss → PostgreSQL → populate cache (TTL `min(3600, expiresAt - now)` or 3600; do not cache an already expired/invalid link as valid).
+3. Validate `active` / `expiresAt` → `410` if unavailable; missing slug → `404`.
+4. **Unlimited** (`maxClicks` null): authorize without a synchronous `UPDATE`; publish analytics best-effort; `302`.
+5. **Capped**: exclusive authority in PostgreSQL via an atomic conditional `UPDATE` (`clickCount < maxClicks` + active/expiry). 1 row → `302` + event `preCounted=true`; 0 rows → `410`. PostgreSQL failure on the gate → `5xx` (never fail-open).
+6. Analytics: Redis Streams (`access_events`, group `analytics-workers`), `eventId` UUID UNIQUE, enqueue **non-blocking** by default (`ANALYTICS_ENQUEUE_TIMEOUT_MS=0`). Worker: `XREADGROUP` → idempotent TX → `XACK` only after `COMMIT`; reclaim via `XAUTOCLAIM`; poison → DLQ `access_events:dlq` after `ANALYTICS_MAX_ATTEMPTS` (default 5).
 
-Delivery: at-least-once pós-aceite; dedup por `eventId`. Perda pré-aceite (Redis down no publish) é aceitável e **não** bloqueia o `302`. Cache Redis down → fallback PG. Worker down → stream acumula; redirect continua.
+Delivery: at-least-once after acceptance; dedup by `eventId`. Pre-acceptance loss (Redis down on publish) is acceptable and **does not** block the `302`. Redis cache down → PostgreSQL fallback. Worker down → the stream accumulates; redirects continue.
 
-Detalhes: [ADR-002](docs/adr/002-maxclicks-postgresql-authority.md), [ADR-003](docs/adr/003-analytics-redis-streams.md).
+Details: [ADR-002](docs/adr/002-maxclicks-postgresql-authority.md), [ADR-003](docs/adr/003-analytics-redis-streams.md).
 
-Para desenvolver a API **fora** do Compose (Postgres já no ar), as migrations podem ser aplicadas no host:
+To develop the API **outside** Compose (Postgres already running), migrations can be applied on the host:
 
 ```bash
 pnpm --filter api exec prisma migrate deploy
@@ -87,46 +90,46 @@ pnpm --filter api exec prisma generate
 
 ---
 
-## O problema
+## The problem
 
-À primeira vista, um encurtador de URLs parece ser basicamente uma associação entre um código curto e uma URL de destino.
+At first glance, a URL shortener looks like a mapping from a short code to a destination URL.
 
-O desafio muda quando considero os requisitos de volume e comportamento:
+The problem changes with the volume and behavior requirements:
 
-- aproximadamente 100 milhões de redirecionamentos por mês;
-- pico de 3.000 redirecionamentos por segundo;
-- P95 abaixo de 50 ms no redirecionamento;
-- aproximadamente 20 mil novos links por dia;
-- um único link pode acumular mais de 10 milhões de acessos;
-- cada acesso precisa ser registrado individualmente;
-- falhas no registro de um acesso não podem impedir o redirecionamento;
-- links podem expirar, ser desativados ou possuir limite de acessos;
-- estatísticas precisam continuar rápidas mesmo para links muito acessados.
+- about 100 million redirects per month;
+- a peak of 3,000 redirects per second;
+- P95 under 50 ms on redirect;
+- about 20 thousand new links per day;
+- a single link can accumulate more than 10 million accesses;
+- each access must be recorded individually;
+- a failure while recording an access must not block the redirect;
+- links can expire, be disabled, or have a click limit;
+- statistics must stay fast even for heavily used links.
 
-Por isso, estou tratando `GET /:slug` como o caminho crítico da aplicação.
+That is why I treat `GET /:slug` as the critical path.
 
-Criar links é uma operação relativamente pouco frequente. Redirecioná-los é o cenário que concentra volume e sensibilidade à latência.
-
----
-
-## Arquitetura
-
-A aplicação é composta por:
-
-- **React** no frontend (`apps/web`);
-- **NestJS** na API (`apps/api`);
-- **PostgreSQL + Prisma** para persistência;
-- **Redis** para cache-aside de metadata de links, fila de analytics (Streams) e rate limiting de `POST /links` — **não** como autoridade de `maxClicks` (ver ADR-002);
-- **worker** Nest separado para processar eventos de acesso;
-- **Docker Compose** para subir o ambiente completo.
-
-A solução permanece proporcional ao problema: sem componentes de infraestrutura só para demonstrar escala. Detalhes consolidados em [docs/architecture/system-design.md](docs/architecture/system-design.md).
+Creating links is relatively infrequent. Redirecting them is where volume and latency sensitivity concentrate.
 
 ---
 
-## Visão inicial do fluxo
+## Architecture
 
-De forma simplificada, penso na aplicação desta maneira:
+The application is made of:
+
+- **React** on the frontend (`apps/web`);
+- **NestJS** on the API (`apps/api`);
+- **PostgreSQL + Prisma** for persistence;
+- **Redis** for link-metadata cache-aside, the analytics queue (Streams), and `POST /links` rate limiting — **not** as the `maxClicks` authority (see ADR-002);
+- a separate Nest **worker** that processes access events;
+- **Docker Compose** to start the full environment.
+
+The solution stays proportional to the problem: no infrastructure added only to demonstrate scale. Consolidated detail is in [docs/architecture/system-design.md](docs/architecture/system-design.md).
+
+---
+
+## Flow
+
+Simplified:
 
     React
       |
@@ -139,10 +142,10 @@ De forma simplificada, penso na aplicação desta maneira:
     Redis            PostgreSQL
       |
       |
-      +------ evento de acesso
+      +------ access event
                   |
                   v
-                Fila
+                Queue
                   |
                   v
                 Worker
@@ -150,17 +153,17 @@ De forma simplificada, penso na aplicação desta maneira:
                   v
               PostgreSQL
 
-O Redis não substitui o PostgreSQL como fonte de verdade.
+Redis does not replace PostgreSQL as the source of truth.
 
-Ele existe principalmente para retirar trabalho desnecessário do banco no caminho mais acessado da aplicação.
+It exists mainly to take unnecessary work off the database on the hottest path.
 
-O processamento dos acessos fica separado do redirect para que a gravação das estatísticas não aumente a latência percebida pelo usuário.
+Access processing stays off the redirect so writing statistics does not increase the latency the user feels.
 
 ---
 
-## Redirecionamento
+## Redirect
 
-O fluxo inicial de `GET /:slug` é:
+The `GET /:slug` flow is:
 
     GET /:slug
         |
@@ -176,155 +179,155 @@ O fluxo inicial de `GET /:slug` é:
         v                   |
     PostgreSQL              |
         |                   |
-        +--> atualiza cache |
+        +--> update cache   |
                             |
         +-------------------+
         |
         v
-    valida o link
+    validate the link
         |
-        +-- inexistente ----------> 404
+        +-- missing --------------> 404
         |
-        +-- inativo --------------> 410
+        +-- inactive -------------> 410
         |
-        +-- expirado -------------> 410
+        +-- expired --------------> 410
         |
-        +-- maxClicks atingido ---> 410
+        +-- maxClicks reached ----> 410
         |
         v
-    publica evento de acesso
+    publish access event
         |
         v
       302 Found
 
-A ideia do Redis aqui é principalmente evitar que links muito acessados façam a API consultar o PostgreSQL a cada redirecionamento.
+Redis is here mainly so very hot links do not make the API hit PostgreSQL on every redirect.
 
-Isso é especialmente relevante no caso de um link viral: o volume total do sistema pode ser administrável enquanto uma única chave concentra uma parcela grande dos acessos.
+That matters for a viral link: total system volume can stay manageable while a single key concentrates a large share of the traffic.
 
-O PostgreSQL continua sendo a fonte persistente dos dados.
-
----
-
-## Por que 302?
-
-O redirecionamento é feito com `302 Found`.
-
-Neste caso, não quero que o navegador trate a associação entre o slug e a URL de destino como um redirecionamento permanente.
-
-Cada acesso precisa chegar novamente à aplicação porque ainda precisamos verificar:
-
-- se o link continua ativo;
-- se expirou;
-- se atingiu `maxClicks`;
-- e registrar aquele acesso.
-
-Com um redirecionamento permanente cacheado pelo cliente, requisições futuras poderiam deixar de passar pela aplicação e, consequentemente, essas regras deixariam de ser avaliadas.
-
-O `302` também é o comportamento definido pelo desafio.
+PostgreSQL remains the persistent source of the data.
 
 ---
 
-## Registro dos acessos
+## Why 302?
 
-Não quero colocar a persistência do acesso no caminho síncrono do redirect.
+Redirects use `302 Found`.
 
-O fluxo pretendido é:
+I do not want the browser to treat the slug-to-destination association as a permanent redirect.
+
+Every access must reach the application again because we still need to check:
+
+- whether the link is still active;
+- whether it expired;
+- whether it reached `maxClicks`;
+- and to record that access.
+
+With a permanent redirect cached by the client, later requests could skip the application, and those rules would stop being evaluated.
+
+`302` is also the required behavior.
+
+---
+
+## Recording accesses
+
+I do not want access persistence on the synchronous redirect path.
+
+The intended flow is:
 
     request
        |
        v
     resolve link
        |
-       +------> evento de acesso ------> fila ------> worker
+       +------> access event ------> queue ------> worker
        |
        v
       302
 
-O usuário não precisa esperar um `INSERT` na tabela de acessos para ser redirecionado.
+The user does not wait for an `INSERT` into the access table before being redirected.
 
-Além da questão de latência, isso atende uma regra importante do problema: uma falha no processamento das estatísticas não pode impedir o usuário de chegar à URL de destino.
+Besides latency, this matches an important rule: a failure while processing statistics must not stop the user from reaching the destination URL.
 
-O worker é responsável por consumir os eventos e persistir as informações necessárias no PostgreSQL.
+The worker consumes the events and persists what PostgreSQL needs.
 
-**Mecanismo escolhido:** Redis Streams (`access_events`, consumer group `analytics-workers`) + worker Nest (`worker.main`). Enqueue no redirect é non-blocking por padrão; persistência idempotente por `eventId` UUID UNIQUE. Detalhes em ADR-003.
+**Chosen mechanism:** Redis Streams (`access_events`, consumer group `analytics-workers`) + Nest worker (`worker.main`). Enqueue on redirect is non-blocking by default; persistence is idempotent via `eventId` UUID UNIQUE. Details in ADR-003.
 
 ---
 
-## Estatísticas
+## Statistics
 
-Um dos pontos que mais influencia a modelagem é a possibilidade de um único link possuir mais de 10 milhões de acessos.
+One of the strongest modeling constraints is that a single link can have more than 10 million accesses.
 
-Não quero que:
+I do not want:
 
     GET /links/:slug/stats
 
-precise percorrer ou agregar milhões de registros toda vez que for chamado.
+to scan or aggregate millions of rows on every call.
 
-A ideia inicial é separar três tipos de informação.
+The model separates three kinds of information.
 
 ### `links`
 
-Dados necessários para resolver e controlar o link.
+Data needed to resolve and control the link.
 
-Entre eles:
+Including:
 
 - slug;
-- URL de destino;
-- ativo/inativo;
-- expiração;
-- limite de acessos;
-- contador total;
-- data de criação.
+- destination URL;
+- active/inactive;
+- expiration;
+- click limit;
+- total counter;
+- creation time.
 
 ### `access_events`
 
-Histórico individual dos acessos.
+Individual access history.
 
-Cada evento deve guardar pelo menos:
+Each event stores at least:
 
 - link;
-- data/hora;
+- timestamp;
 - referer;
 - user-agent.
 
-Essa tabela atende tanto ao histórico individual exigido quanto à consulta dos últimos acessos.
+This table serves both the required individual history and the recent-access query.
 
-Para buscar os últimos 20 registros sem percorrer todo o histórico, existe um índice em:
+To fetch the last 20 rows without scanning the whole history, there is an index on:
 
     (link_id, accessed_at DESC)
 
 ### `daily_link_stats`
 
-Contadores agregados por link e por dia.
+Aggregated counters per link and per day.
 
-Em vez de calcular a série dos últimos sete dias percorrendo toda a tabela de eventos, a API consulta diretamente esses contadores.
+Instead of computing the last seven days by scanning the event table, the API reads these counters directly.
 
-A intenção é que o custo do endpoint de estatísticas seja limitado independentemente de o link possuir mil ou 10 milhões de acessos.
+The goal is a bounded stats-endpoint cost whether the link has a thousand accesses or 10 million.
 
-De forma resumida:
+In short:
 
-    total de acessos
+    lifetime total
           |
           v
     links.click_count
 
 
-    últimos 7 dias
+    last 7 days
           |
           v
     daily_link_stats
 
 
-    últimos 20 acessos
+    last 20 accesses
           |
           v
     access_events
-    + índice
+    + index
     + LIMIT 20
 
-### `GET /links` (suporte à UI)
+### `GET /links` (UI support)
 
-Endpoint auxiliar para a listagem da interface web (o enunciado pede lista na UI; não exige este path na API). Leitura PostgreSQL apenas — **sem Redis**, sem paginação, sem query params.
+Auxiliary endpoint for the web list (the UI needs a list; this path is not a separate product requirement beyond that). PostgreSQL read only — **no Redis**, no pagination, no query params.
 
 ```http
 GET /links
@@ -347,25 +350,25 @@ GET /links
 }
 ```
 
-| Regra | Detalhe |
+| Rule | Detail |
 | --- | --- |
-| Limite | **50** links mais recentes (`LIMIT 50`) |
-| Ordenação | `createdAt DESC` |
-| Vazio | `{ "items": [] }` |
-| `clickCount` | `links.click_count` (**nunca** `COUNT(AccessEvent)`); mesma consistência eventual do stats |
-| Estado | campos brutos (`active`, `expiresAt`, `maxClicks`, `clickCount`); a UI deriva inactive/expired/maxed |
-| Índice | **sem** índice em `createdAt` nesta unidade — endpoint auxiliar; revisitável se a tabela crescer e o Seq Scan degradar a UI |
+| Limit | **50** most recent links (`LIMIT 50`) |
+| Order | `createdAt DESC` |
+| Empty | `{ "items": [] }` |
+| `clickCount` | `links.click_count` (**never** `COUNT(AccessEvent)`); same eventual consistency as stats |
+| State | raw fields (`active`, `expiresAt`, `maxClicks`, `clickCount`); the UI derives inactive/expired/maxed |
+| Index | **no** `createdAt` index in this unit — auxiliary endpoint; revisit if the table grows and the Seq Scan hurts the UI |
 
-### `GET /links/:slug/stats` (implementado)
+### `GET /links/:slug/stats` (implemented)
 
-Leitura **somente PostgreSQL** (Redis não participa; sem cache de stats). Shape:
+**PostgreSQL-only** read (Redis does not participate; no stats cache). Shape:
 
-1. `Link` por `slug` UNIQUE → `totalClicks` = `Link.clickCount` (**nunca** `COUNT(AccessEvent)`);
-2. após obter `linkId`, em paralelo (`Promise.all`):
-   - `DailyLinkStat` onde `linkId` + `date` entre o início e o fim da janela UTC → série `last7Days`;
-   - `AccessEvent` onde `linkId`, `ORDER BY accessedAt DESC LIMIT 20` → `recentAccesses`.
+1. `Link` by UNIQUE `slug` → `totalClicks` = `Link.clickCount` (**never** `COUNT(AccessEvent)`);
+2. after `linkId`, in parallel (`Promise.all`):
+   - `DailyLinkStat` where `linkId` + `date` is inside the UTC window → `last7Days`;
+   - `AccessEvent` where `linkId`, `ORDER BY accessedAt DESC LIMIT 20` → `recentAccesses`.
 
-**Contrato de resposta:**
+**Response contract:**
 
 ```json
 {
@@ -385,64 +388,65 @@ Leitura **somente PostgreSQL** (Redis não participa; sem cache de stats). Shape
 }
 ```
 
-| Campo | Origem | Notas |
+| Field | Source | Notes |
 | --- | --- | --- |
-| `totalClicks` | `links.click_count` | `number`; conversão BigInt com rejeição se `> Number.MAX_SAFE_INTEGER` |
-| `last7Days` | `daily_link_stats` | **exatamente 7** entradas; **hoje UTC + 6 dias civis anteriores**; ordem **ASC**; dias ausentes **zero-fill na aplicação** |
-| `recentAccesses` | `access_events` | até **20** mais recentes; `referer` / `userAgent` preservam `null` |
+| `totalClicks` | `links.click_count` | `number`; BigInt conversion rejects values `> Number.MAX_SAFE_INTEGER` |
+| `last7Days` | `daily_link_stats` | **exactly 7** entries; **today UTC + the 6 previous civil days**; **ASC** order; missing days are **zero-filled in the application** |
+| `recentAccesses` | `access_events` | up to the **20** most recent; `referer` / `userAgent` keep `null` |
 
-**Semântica de estado do link:** stats retornam **200** para links `disabled`, `expired` ou com `maxClicks` atingido. Somente slug inexistente → **404**.
+**Link state:** stats return **200** for `disabled`, `expired`, or `maxClicks`-reached links. Only a missing slug → **404**.
 
-**Consistência eventual (ADR-001):** o worker assíncrono pode deixar `clickCount` (especialmente capped / preCounted) temporariamente à frente de `daily_link_stats` / `access_events`. Isso **não é tratado como erro** e **não** é sincronizado artificialmente na leitura.
+**Eventual consistency (ADR-001):** the async worker can leave `clickCount` (especially capped / preCounted) temporarily ahead of `daily_link_stats` / `access_events`. That is **not treated as an error** and is **not** artificially synchronized on read.
 
-**Por que 10M+ eventos não tornam stats linear:** o total é um contador na linha do link; a série usa no máximo 7 linhas diárias (PK `(linkId, date)`); o histórico recente usa o índice `(linkId, accessedAt DESC)` com `LIMIT 20`. Nenhuma dessas queries faz full scan proporcional ao histórico.
+**Why 10M+ events do not make stats linear:** the total is a counter on the link row; the series uses at most 7 daily rows (PK `(linkId, date)`); recent history uses the `(linkId, accessedAt DESC)` index with `LIMIT 20`. None of these queries full-scans in proportion to history.
+
 ---
 
-## Cache e desativação
+## Cache and disable
 
-Adicionar cache cria outro problema que precisa ser tratado explicitamente.
+Adding a cache creates a problem that has to be handled explicitly.
 
-Se um link estiver armazenado no Redis e for desativado no PostgreSQL, não posso esperar o TTL do cache expirar para que a alteração tenha efeito.
+If a link is stored in Redis and then disabled in PostgreSQL, I cannot wait for the cache TTL to expire before the change takes effect.
 
-O requisito é que a desativação seja percebida imediatamente.
+Disable must be observed immediately.
 
-### `PATCH /links/:slug` (somente disable)
+### `PATCH /links/:slug` (disable only)
 
-Body aceito: `{ "active": false }`. Sem reativação e sem editar `url` / `expiresAt` / `maxClicks`.
+Accepted body: `{ "active": false }`. No re-enable and no edits to `url` / `expiresAt` / `maxClicks`.
 
-| Caso | Resposta |
+| Case | Response |
 |------|----------|
-| Sucesso (1ª vez ou retry idempotente) | **204 No Content** |
-| Slug inexistente | **404** |
-| `active: true` / campos extras / body inválido | **400** |
-| Redis falha no `DEL` após PG `active=false` | **503** (PG permanece `false`; **sem** compensação) |
+| Success (first time or idempotent retry) | **204 No Content** |
+| Missing slug | **404** |
+| `active: true` / extra fields / invalid body | **400** |
+| Redis `DEL` fails after PG `active=false` | **503** (PG stays `false`; **no** compensation) |
 
-Fluxo:
+Flow:
 
 ```text
 UPDATE links SET active=false WHERE slug=? AND active=true
-DEL link:{slug}   # obrigatório antes do 204
+DEL link:{slug}   # required before 204
 ```
 
-- Disable é **monotônico** (`true → false` apenas). Nunca se escreve `active=true` de volta.
-- `PATCH 204` implica: PG disabled **e** a stale key foi removida → novos `GET /:slug` observam **410**.
-- `PATCH 503` **não** promete invalidação imediata; o retry do mesmo PATCH tenta `DEL` de novo e, com sucesso, retorna **204**.
-- GETs já em voo durante o PATCH podem ainda completar com 302.
-- TTL do cache **não** é mecanismo de correctness para disable.
-- Contrato de resposta de `POST /links` **não** muda (sem campo `active` no create).
+- Disable is **monotonic** (`true → false` only). `active=true` is never written back.
+- `PATCH 204` means: PostgreSQL disabled **and** the stale key was removed → later `GET /:slug` observe **410**.
+- `PATCH 503` does **not** promise immediate invalidation; retrying the same PATCH tries `DEL` again and, on success, returns **204**.
+- GETs already in flight during the PATCH may still complete with 302.
+- Cache TTL is **not** the correctness mechanism for disable.
+- The `POST /links` response contract does **not** change (no `active` field on create).
 
 ---
 
-## `maxClicks` e concorrência
+## `maxClicks` and concurrency
 
-Esse é um dos pontos que quero validar com mais cuidado durante a implementação.
+This is one of the points I wanted to validate carefully.
 
-Considere:
+Consider:
 
     maxClicks = 100
     clickCount = 99
 
-e duas requisições chegando praticamente ao mesmo tempo:
+and two requests arriving at almost the same time:
 
     Request A ----+
                   |
@@ -450,56 +454,56 @@ e duas requisições chegando praticamente ao mesmo tempo:
                   |
     Request B ----+
 
-Não posso simplesmente fazer:
+I cannot simply:
 
-    lê contador
-    verifica limite
-    incrementa contador
+    read counter
+    check limit
+    increment counter
 
-nas duas requisições de forma independente.
+independently on both requests.
 
-As duas poderiam ler `99` antes que qualquer uma delas atualizasse o valor e ambas seriam autorizadas.
+Both could read `99` before either update landed, and both would be authorized.
 
-A solução precisa garantir atomicidade nessa operação.
+The operation needs atomicity.
 
-**Decisão final (ADR-002):** links capped usam um `UPDATE` condicional atômico no **PostgreSQL** como única autoridade (`clickCount < maxClicks` + `active` + `expiresAt`). Redis guarda só metadata de cache — não é autoridade de enforcement. Links unlimited não fazem esse write no hot path; o worker incrementa `clickCount` após o evento (ADR-003).
+**Final decision (ADR-002):** capped links use an atomic conditional `UPDATE` in **PostgreSQL** as the only authority (`clickCount < maxClicks` + `active` + `expiresAt`). Redis stores cache metadata only — it is not the enforcement authority. Unlimited links do not do that write on the hot path; the worker increments `clickCount` after the event (ADR-003).
 
-Ver [ADR-002](docs/adr/002-maxclicks-postgresql-authority.md).
+See [ADR-002](docs/adr/002-maxclicks-postgresql-authority.md).
 
 ---
 
 ## Slugs
 
-Slugs personalizados usam o charset Base62 (`0-9`, `A-Z`, `a-z`), length 1–64, case-sensitive. O valor `links` é rejeitado para não conflitar com rotas `/links/*`. Tentativa de reutilizar um slug existente falha com `409` sem sobrescrever o link anterior — a constraint `UNIQUE` do PostgreSQL é a autoridade final.
+Custom slugs use the Base62 charset (`0-9`, `A-Z`, `a-z`), length 1–64, case-sensitive. The value `links` is rejected so it does not collide with `/links/*`. Reusing an existing slug fails with `409` and does not overwrite the previous link — the PostgreSQL `UNIQUE` constraint is the final authority.
 
-### Geração automática
+### Automatic generation
 
-Quando `slug` não é informado, a API gera um slug Base62 de **8** caracteres com `crypto.randomInt` (sem `Math.random`), faz `INSERT` e, em colisão `UNIQUE`, regenera e tenta de novo (máximo **5** tentativas).
+When `slug` is omitted, the API generates an **8**-character Base62 slug with `crypto.randomInt` (not `Math.random`), `INSERT`s, and on a `UNIQUE` collision regenerates and retries (maximum **5** attempts).
 
-Espaço: \(62^8 \approx 2{,}18 \times 10^{14}\).
+Space: \(62^8 \approx 2.18 \times 10^{14}\).
 
-O argumento relevante para o retry não é a probabilidade acumulada estilo birthday problem sobre todo o histórico, e sim a chance de uma **nova** geração cair em um slug já ocupado:
+The relevant retry argument is not the accumulated birthday-problem probability over the whole history. It is the chance that a **new** generation lands on an already taken slug:
 
 \[
 p \approx \frac{n}{N}
 \]
 
-Com ~73M links (~10 anos a ~20k/dia): \(p \approx 73 \times 10^6 / 2{,}18 \times 10^{14} \approx 3{,}3 \times 10^{-7}\) — cerca de uma colisão a cada ~3 milhões de novas tentativas nesse nível de ocupação. Com `UNIQUE` + retry, length 8 permanece adequado.
+With ~73M links (~10 years at ~20k/day): \(p \approx 73 \times 10^6 / 2.18 \times 10^{14} \approx 3.3 \times 10^{-7}\) — about one collision every ~3 million new attempts at that occupancy. With `UNIQUE` + retry, length 8 stays adequate.
 
-Unicidade continua garantida pelo PostgreSQL em todos os casos. Se as 5 tentativas de geração automática esgotarem (extremamente improvável na escala do desafio), a API responde `503`.
+Uniqueness is still guaranteed by PostgreSQL in every case. If all 5 automatic attempts are exhausted (extremely unlikely at this scale), the API returns `503`.
 
 ---
 
 ## Rate limiting
 
-Somente **`POST /links`** é limitado por IP. **`GET /:slug` não** entra no limiter.
+Only **`POST /links`** is limited by IP. **`GET /:slug` is not** in the limiter.
 
-- Algoritmo: **fixed window** no Redis.
-- Key: `rl:post-links:{ip}` com TTL = janela (sem keys permanentes).
-- Atomicidade: script Lua em **uma** ida ao Redis — `INCR`; se primeira ocorrência, `EXPIRE`; retorna `{count, ttl}` para allow/deny e `Retry-After`.
-- Excedeu → **429** `{ statusCode: 429, message: "rate limit exceeded" }` + header **`Retry-After`** (segundos restantes da janela).
-- Redis indisponível → **fail-open** (criação segue; log `rate_limit_unavailable`). Rate limit é proteção, não fonte de verdade dos links.
-- IP: `req.ip`. `TRUST_PROXY` só se configurado explicitamente (`true`/`1` ou hops); sem isso não se confia em `X-Forwarded-For`.
+- Algorithm: **fixed window** in Redis.
+- Key: `rl:post-links:{ip}` with TTL = window (no permanent keys).
+- Atomicity: one Lua script, **one** Redis round trip — `INCR`; on the first hit, `EXPIRE`; returns `{count, ttl}` for allow/deny and `Retry-After`.
+- Over the limit → **429** `{ statusCode: 429, message: "rate limit exceeded" }` + **`Retry-After`** header (seconds left in the window).
+- Redis unavailable → **fail-open** (create continues; log `rate_limit_unavailable`). Rate limiting is protection, not the source of truth for links.
+- IP: `req.ip`. `TRUST_PROXY` only when set explicitly (`true`/`1` or hop count); otherwise `X-Forwarded-For` is not trusted.
 
 | Env | Default |
 |-----|---------|
@@ -509,9 +513,9 @@ Somente **`POST /links`** é limitado por IP. **`GET /:slug` não** entra no lim
 
 ---
 
-## Estrutura do projeto
+## Project structure
 
-Monorepo com frontend e backend no mesmo repositório; analytics em processo worker separado (mesmo pacote `apps/api`, entry `worker.main`):
+Monorepo with frontend and backend in the same repository; analytics in a separate worker process (same `apps/api` package, entry `worker.main`):
 
     .
     ├── apps/
@@ -529,39 +533,39 @@ Monorepo com frontend e backend no mesmo repositório; analytics em processo wor
 
 ---
 
-## Testes
+## Tests
 
-Os testes se concentram principalmente nas regras que podem quebrar o comportamento do redirect.
+Tests focus on the rules that can break redirect behavior.
 
-Entre os cenários cobertos:
+Covered scenarios include:
 
-- criação de link;
-- validação da URL;
-- geração automática de slug;
-- conflito de slug personalizado;
-- slug inexistente;
-- link desativado;
-- link expirado;
+- link creation;
+- URL validation;
+- automatic slug generation;
+- custom slug conflict;
+- missing slug;
+- disabled link;
+- expired link;
 - `maxClicks`;
-- concorrência no limite de acessos;
-- redirect `302`;
+- concurrency at the click limit;
+- `302` redirect;
 - cache hit;
 - cache miss;
-- invalidação do cache;
-- processamento assíncrono dos eventos;
-- consulta das estatísticas.
+- cache invalidation;
+- asynchronous event processing;
+- statistics queries.
 
-Há fluxos de integração/E2E cobrindo o redirecionamento completo. O comando `test:e2e` da API é separado: não é incluído pelo script `test` da raiz (`pnpm test` / `pnpm -r run test`) nem pelo `pnpm test` da API.
+Integration/E2E flows cover the full redirect. The API `test:e2e` command is separate: it is not included by the root `test` script (`pnpm test` / `pnpm -r run test`) or by the API `pnpm test`.
 
-A validação da aplicação parte de um ambiente limpo para garantir que dependências, banco e migrations sejam configurados a partir das instruções do repositório.
+Application validation starts from a clean environment so dependencies, database, and migrations come from the repository instructions.
 
-O objetivo é que a solução possa ser iniciada com:
+The goal is to start with:
 
     docker compose up
 
-### Validação com Docker Compose
+### Validation with Docker Compose
 
-Com a stack no ar (`docker compose up --build`):
+With the stack up (`docker compose up --build`):
 
 ```bash
 docker compose exec api pnpm test
@@ -577,31 +581,31 @@ docker compose exec web pnpm build
 
 ---
 
-## O que não pretendo fazer
+## Out of scope
 
-Algumas coisas fariam sentido em uma infraestrutura de produção maior, mas não considero necessárias para esta entrega:
+Some of these make sense in a larger production setup. They are not part of this delivery:
 
 - Kubernetes;
-- infraestrutura em cloud;
-- múltiplas réplicas da API;
-- cluster de PostgreSQL;
-- cluster de Redis;
-- CDN;
-- autenticação;
+- cloud infrastructure;
+- multiple API replicas;
+- a PostgreSQL cluster;
+- a Redis cluster;
+- a CDN;
+- authentication;
 - CI/CD;
-- arquitetura de microserviços.
+- a microservice architecture.
 
-A aplicação foi pensada para não impedir uma evolução futura nessa direção, mas não quero implementar complexidade que o desafio não pede.
+The application is shaped so those can be added later, without implementing complexity this project does not need.
 
-Se fosse necessário evoluir essa arquitetura para um ambiente de produção com outra ordem de grandeza, alguns caminhos naturais seriam:
+If this architecture had to grow by another order of magnitude, natural next steps would be:
 
-    API stateless
+    stateless API
         |
         v
     Load Balancer
         |
         v
-    múltiplas instâncias
+    multiple instances
 
 
     PostgreSQL
@@ -614,50 +618,50 @@ Se fosse necessário evoluir essa arquitetura para um ambiente de produção com
         +--> HA / cluster
 
 
-    processamento assíncrono
+    asynchronous processing
         |
-        +--> broker durável
+        +--> durable broker
 
-Esses componentes fazem parte da discussão de evolução da arquitetura, não do escopo da implementação atual.
+Those components belong to the evolution discussion, not to the current implementation.
 
 ---
 
-## Uso de IA
+## Use of AI
 
-Estou utilizando IA (Cursor / agentes especializados no repositório) como ferramenta de apoio à engenharia durante o desafio — não como substituto de revisão ou responsabilidade humana.
+I used AI (Cursor / specialized agents in the repository) as an engineering aid — not as a substitute for review or human responsibility.
 
-A IA apoiou:
+AI helped with:
 
-- discussão e documentação de arquitetura (ADRs, modelagem, trade-offs);
-- implementação e ajustes de código (API e frontend);
-- derivação e revisão de testes;
-- revisão de alterações (contratos, índices, UX);
-- documentação (README, design Kiip).
+- architecture discussion and documentation (ADRs, modeling, trade-offs);
+- implementation and code changes (API and frontend);
+- test derivation and review;
+- change review (contracts, indexes, UX);
+- documentation (README, UI design).
 
-Decisões relevantes foram revisadas antes ou durante a implementação; código gerado ou alterado precisa ser compreendido; testes verdes não são tratados isoladamente como prova de correção; commits são feitos manualmente após revisão humana. A responsabilidade pelas decisões e pelo código permanece humana.
+Relevant decisions were reviewed before or during implementation; generated or changed code has to be understood; green tests are not treated, by themselves, as proof of correctness; commits are made manually after human review. Responsibility for the decisions and the code stays human.
 
-Um exemplo inicial foi a discussão sobre `maxClicks`: uma implementação simples baseada em leitura e incremento poderia passar em testes básicos e ainda falhar com requisições concorrentes. Outro ponto foi a relação entre cache e desativação imediata dos links — Redis melhora a leitura, mas exige invalidação quando a alteração precisa ter efeito imediato. No frontend, a listagem via `GET /links` (em vez de inventário só no cliente) foi a decisão para manter o backend como autoridade.
+An early example was `maxClicks`: a simple read-then-increment could pass basic tests and still fail under concurrent requests. Another was cache versus immediate disable — Redis speeds reads, but it needs invalidation when the change must take effect immediately. On the frontend, listing via `GET /links` (instead of a client-only inventory) keeps the backend as the authority.
 
-As decisões descritas neste documento e em `docs/` são as que escolhi seguir depois dessa análise; preciso conseguir justificar os trade-offs de cada uma delas.
+The decisions in this document and in `docs/` are the ones I chose to follow after that analysis; I need to be able to justify each trade-off.
 
 ### Compound Engineering
 
-Para não reconstruir o mesmo contexto a cada prompt, decisões e aprendizados relevantes ficam persistidos como documentação de arquitetura, ADRs, project rules e agents especializados. O objetivo é reutilizar contexto entre unidades de trabalho, não acumular arquivos por quantidade.
+To avoid rebuilding the same context on every prompt, relevant decisions and lessons stay in architecture docs, ADRs, project rules, and specialized agents. The goal is to reuse context across units of work, not to accumulate files for their own sake.
 
-#### Fontes de verdade
+#### Sources of truth
 
-| Camada | Papel |
-|--------|--------|
-| `README.MD` | requisitos, execução e visão do projeto |
-| `docs/architecture/` | arquitetura implementada ([system-design.md](docs/architecture/system-design.md)) |
-| `docs/adr/` | decisões arquiteturais e trade-offs |
-| `docs/design/kiip-ui.md` | design system da UI (cores, tipografia, componentes) |
-| `.cursor/rules/` | guardrails de implementação |
-| `.cursor/agents/` | especialistas de análise |
+| Layer | Role |
+|--------|------|
+| `README.MD` | requirements, how to run, project view |
+| `docs/architecture/` | implemented architecture ([system-design.md](docs/architecture/system-design.md)) |
+| `docs/adr/` | architectural decisions and trade-offs |
+| `docs/design/ui.md` | UI design system (colors, typography, components) |
+| `.cursor/rules/` | implementation guardrails |
+| `.cursor/agents/` | analysis specialists |
 
-Não duplicar decisões entre essas camadas: rules e agents apontam para a documentação; não a reescrevem.
+Do not duplicate decisions across those layers: rules and agents point at the documentation; they do not rewrite it.
 
-#### Estrutura
+#### Structure
 
 ```text
 .cursor/
@@ -672,26 +676,26 @@ Não duplicar decisões entre essas camadas: rules e agents apontam para a docum
     └── reviewer.md
 ```
 
-**Rules** — guardrails aplicados durante o desenvolvimento:
+**Rules** — guardrails applied during development:
 
-- `00-project` — escopo, fontes de verdade, dependências, documentação e Git;
-- `backend` — NestJS, TypeScript, API, Prisma/PostgreSQL, concorrência e performance;
-- `frontend` — React, TypeScript, integração com API, UX e acessibilidade.
+- `00-project` — scope, sources of truth, dependencies, documentation, and Git;
+- `backend` — NestJS, TypeScript, API, Prisma/PostgreSQL, concurrency, and performance;
+- `frontend` — React, TypeScript, API integration, UX, and accessibility.
 
-**Agents** — especialistas sob demanda:
+**Agents** — specialists on demand:
 
-- `architect` — alternativas e trade-offs antes de decisões arquiteturais relevantes;
-- `database` — modelagem, queries, índices, migrations, integridade e concorrência;
-- `testing` — cenários derivados dos requisitos e gaps independentemente da implementação;
-- `reviewer` — confronta implementação, requisitos, documentação e testes antes do commit.
+- `architect` — alternatives and trade-offs before relevant architectural decisions;
+- `database` — modeling, queries, indexes, migrations, integrity, and concurrency;
+- `testing` — scenarios derived from requirements and gaps, independent of the implementation;
+- `reviewer` — compares implementation, requirements, documentation, and tests before commit.
 
-#### Fluxo
+#### Flow
 
 ```text
 Requirement
   → Context
   → Plan
-  → Architecture / Data review (quando necessário)
+  → Architecture / Data review (when needed)
   → Implementation
   → Testing
   → Technical review
@@ -699,217 +703,217 @@ Requirement
   → Manual commit
 ```
 
-Nem todo agent participa de toda alteração. Exemplos: decisão arquitetural relevante → `architect`; mudança sensível de persistência → `database`; nova regra de negócio → `testing`; unidade concluída → `reviewer`. Especialização só quando agrega valor.
+Not every agent joins every change. Examples: a relevant architectural decision → `architect`; a sensitive persistence change → `database`; a new business rule → `testing`; a finished unit → `reviewer`. Specialize only when it adds value.
 
 ---
 
-# Plano de execução
+# Execution plan
 
-Antes de começar a implementação, dividi o desafio em etapas para evitar tentar resolver todos os problemas ao mesmo tempo.
+Before implementation, I split the work into stages so I would not try to solve every problem at once.
 
-A prioridade é fechar primeiro a fundação e o caminho crítico do backend. O frontend entra depois que os contratos principais da API estiverem funcionando.
+The priority was to close the foundation and the backend critical path first. The frontend came after the main API contracts were working.
 
-## Sexta-feira — 18/09 — Fundação e arquitetura
+## Friday — 18/09 — Foundation and architecture
 
-Objetivo: terminar o dia com o problema entendido e a base do projeto definida, sem antecipar a implementação.
+Goal: finish the day with the problem understood and the project base defined, without jumping into implementation.
 
-- [x] leitura completa do desafio;
-- [x] levantamento dos requisitos funcionais e não funcionais;
-- [x] identificação do redirect como caminho crítico;
-- [x] estimativas de volume e análise dos pontos de escala;
-- [x] definição inicial da arquitetura;
-- [x] decisão inicial de uso de PostgreSQL, Redis e processamento assíncrono;
-- [x] definição inicial da estratégia de cache;
-- [x] análise do problema de concorrência em `maxClicks`;
-- [x] definição da estratégia inicial para estatísticas com grande volume de acessos;
-- [x] desenho do System Design;
-- [x] criação do repositório;
-- [x] documentação das decisões iniciais.
+- [x] full reading of the problem;
+- [x] functional and non-functional requirements;
+- [x] redirect identified as the critical path;
+- [x] volume estimates and scale-point analysis;
+- [x] initial architecture;
+- [x] initial decision to use PostgreSQL, Redis, and asynchronous processing;
+- [x] initial cache strategy;
+- [x] analysis of `maxClicks` concurrency;
+- [x] initial strategy for statistics at high access volume;
+- [x] system design sketch;
+- [x] repository created;
+- [x] initial decisions documented.
 
-Ao final desta etapa, quero ter clareza sobre o que será construído e, principalmente, por que cada componente existe.
+By the end of this stage I wanted clarity on what would be built and, mainly, why each component exists.
 
 ---
 
-## Sábado — 19/09 — Backend e caminho crítico
+## Saturday — 19/09 — Backend and critical path
 
-Objetivo: terminar o dia com o núcleo funcional da aplicação funcionando.
+Goal: finish the day with the functional core working.
 
-### Fundação
+### Foundation
 
-- [x] criar a estrutura do monorepo;
-- [x] configurar NestJS;
-- [x] configurar PostgreSQL;
-- [x] configurar Prisma;
-- [x] configurar Redis;
-- [x] criar o Docker Compose;
-- [x] configurar variáveis de ambiente e `.env.example`;
-- [x] criar e validar as migrations iniciais.
+- [x] create the monorepo structure;
+- [x] set up NestJS;
+- [x] set up PostgreSQL;
+- [x] set up Prisma;
+- [x] set up Redis;
+- [x] create Docker Compose;
+- [x] configure environment variables and `.env.example`;
+- [x] create and validate the initial migrations.
 
 ### Links
 
-- [x] implementar `POST /links`;
-- [x] validar URL de destino;
-- [x] implementar slug personalizado;
-- [x] definir e implementar a geração automática de slug;
-- [x] garantir unicidade no banco;
-- [x] implementar `expiresAt`;
-- [x] implementar `maxClicks`;
-- [x] implementar rate limiting por IP.
+- [x] implement `POST /links`;
+- [x] validate the destination URL;
+- [x] implement custom slugs;
+- [x] define and implement automatic slug generation;
+- [x] guarantee uniqueness in the database;
+- [x] implement `expiresAt`;
+- [x] implement `maxClicks`;
+- [x] implement per-IP rate limiting.
 
 ### Redirect
 
-- [x] implementar `GET /:slug`;
-- [x] retornar `404` para links inexistentes;
-- [x] retornar `410` para links indisponíveis;
-- [x] implementar redirect `302`;
-- [x] implementar cache-aside com Redis;
-- [x] tratar cache hit e cache miss;
-- [x] implementar invalidação de cache;
-- [x] tratar concorrência relacionada a `maxClicks`.
+- [x] implement `GET /:slug`;
+- [x] return `404` for missing links;
+- [x] return `410` for unavailable links;
+- [x] implement `302` redirect;
+- [x] implement Redis cache-aside;
+- [x] handle cache hit and cache miss;
+- [x] implement cache invalidation;
+- [x] handle `maxClicks` concurrency.
 
 ### Analytics
 
-- [x] definir o mecanismo da fila;
-- [x] publicar eventos de acesso sem bloquear o redirect;
-- [x] criar o worker;
-- [x] persistir os acessos individuais;
-- [x] atualizar o contador total;
-- [x] atualizar as agregações diárias;
-- [x] garantir que falhas no processamento de analytics não impeçam o redirect.
+- [x] define the queue mechanism;
+- [x] publish access events without blocking the redirect;
+- [x] create the worker;
+- [x] persist individual accesses;
+- [x] update the total counter;
+- [x] update daily aggregates;
+- [x] make sure analytics processing failures do not block the redirect.
 
-A principal meta do sábado é conseguir executar o seguinte fluxo:
+The main Saturday goal was this flow:
 
-    criar link
+    create link
         |
         v
-    receber slug
+    receive slug
         |
         v
-    acessar slug
+    open slug
         |
         v
-    resolver pelo cache/banco
+    resolve via cache/database
         |
         v
-    validar regras
+    validate rules
         |
         v
-    publicar evento
+    publish event
         |
         +-------------> worker
         |
         v
-    retornar 302
+    return 302
 
-Se esse caminho estiver sólido, o restante da aplicação passa a trabalhar sobre uma base funcional.
+Once that path is solid, the rest of the application sits on a working base.
 
 ---
 
-## Domingo — 20/09 — Estatísticas, frontend e testes
+## Sunday — 20/09 — Statistics, frontend, and tests
 
-Objetivo: transformar o backend funcional em uma entrega completa.
+Goal: turn the working backend into a complete delivery.
 
-### Estatísticas
+### Statistics
 
-- [x] implementar `GET /links/:slug/stats`;
-- [x] retornar total de acessos;
-- [x] retornar série diária dos últimos sete dias;
-- [x] retornar os últimos 20 acessos;
-- [x] validar os índices utilizados pelas consultas;
-- [x] garantir que as consultas não dependam de percorrer todo o histórico.
+- [x] implement `GET /links/:slug/stats`;
+- [x] return the access total;
+- [x] return the daily series for the last seven days;
+- [x] return the last 20 accesses;
+- [x] validate the indexes used by the queries;
+- [x] make sure the queries do not scan the full history.
 
-### Alteração de links
+### Link updates
 
-- [x] implementar `PATCH /links/:slug`;
-- [x] permitir desativação;
-- [x] invalidar imediatamente o cache correspondente;
-- [x] validar o comportamento do redirect após a alteração.
+- [x] implement `PATCH /links/:slug`;
+- [x] allow disable;
+- [x] invalidate the matching cache immediately;
+- [x] validate redirect behavior after the change.
 
 ### Frontend
 
-- [x] criar a aplicação React;
-- [x] implementar formulário de criação de links;
-- [x] listar links criados;
-- [x] exibir total de acessos;
-- [x] criar visualização das estatísticas;
-- [x] tratar estados de loading e erro;
-- [x] manter a interface simples, priorizando funcionalidade.
+- [x] create the React app;
+- [x] implement the create-link form;
+- [x] list created links;
+- [x] show the access total;
+- [x] create the statistics view;
+- [x] handle loading and error states;
+- [x] keep the interface simple, functionality first.
 
-### Testes
+### Tests
 
-- [x] criação de link;
-- [x] URL inválida;
-- [x] slug personalizado duplicado;
-- [x] expiração;
-- [x] desativação;
+- [x] link creation;
+- [x] invalid URL;
+- [x] duplicate custom slug;
+- [x] expiration;
+- [x] disable;
 - [x] `maxClicks`;
-- [x] concorrência no limite de acessos;
-- [x] redirect `302`;
+- [x] concurrency at the click limit;
+- [x] `302` redirect;
 - [x] cache hit;
 - [x] cache miss;
-- [x] invalidação de cache;
-- [x] processamento dos eventos de acesso;
-- [x] estatísticas;
-- [x] pelo menos um fluxo E2E completo de redirecionamento.
+- [x] cache invalidation;
+- [x] access-event processing;
+- [x] statistics;
+- [x] at least one full redirect E2E flow.
 
-### Documentação
+### Documentation
 
-- [x] revisar este README;
-- [x] atualizar decisões que tenham mudado durante a implementação;
-- [x] documentar a estratégia final de geração de slugs;
-- [x] documentar a solução final para `maxClicks`;
-- [x] documentar o mecanismo escolhido para processamento assíncrono;
-- [x] atualizar a seção de uso de IA;
-- [x] adicionar o System Design final;
-- [x] documentar como executar a aplicação;
-- [x] documentar como executar os testes.
-
----
-
-## Segunda-feira — 21/09 — Validação e entrega
-
-A segunda-feira fica reservada para revisão e envio, e não para implementação planejada de novas funcionalidades.
-
-A validação final será feita simulando o ambiente de quem receberá o projeto.
-
-A ideia é partir de um clone limpo do repositório e verificar se apenas as instruções documentadas são suficientes para executar a aplicação.
-
-### Checklist final
-
-- [x] clonar o repositório em um diretório limpo;
-- [x] configurar as variáveis de ambiente conforme `.env.example`;
-- [x] executar `docker compose up`;
-- [x] confirmar que as migrations são aplicadas corretamente;
-- [x] confirmar que frontend, API, PostgreSQL, Redis e worker iniciam;
-- [x] criar um link pela interface;
-- [x] acessar o link curto;
-- [x] confirmar o redirect `302`;
-- [x] confirmar o registro do acesso;
-- [x] consultar as estatísticas;
-- [x] desativar o link;
-- [x] confirmar que o próximo acesso retorna `410`;
-- [x] executar toda a suíte de testes;
-- [x] verificar se nenhum secret foi commitado;
-- [x] revisar o histórico de commits;
-- [x] revisar o README;
-- [x] revisar o System Design;
-- [x] conferir se consigo justificar as decisões implementadas.
-
-Somente depois dessa validação o repositório será compartilhado para avaliação.
+- [x] review this README;
+- [x] update decisions that changed during implementation;
+- [x] document the final slug-generation strategy;
+- [x] document the final `maxClicks` solution;
+- [x] document the chosen asynchronous processing mechanism;
+- [x] update the AI-use section;
+- [x] add the final system design;
+- [x] document how to run the application;
+- [x] document how to run the tests.
 
 ---
 
-## Critério para corte de escopo
+## Monday — 21/09 — Validation and delivery
 
-Se o cronograma ficar apertado, vou priorizar na seguinte ordem:
+Monday was reserved for review and handoff, not for planned new features.
 
-1. aplicação subindo corretamente com Docker Compose;
-2. regras de negócio do backend;
-3. redirect e seus casos de erro;
-4. testes automatizados;
-5. registro assíncrono dos acessos;
-6. endpoint de estatísticas;
-7. frontend funcional;
-8. melhorias visuais e refinamentos.
+Final validation simulates the environment of someone receiving the project.
 
-Não pretendo sacrificar corretude ou testes para adicionar infraestrutura ou acabamento que não façam parte dos critérios principais do desafio.
+The idea is to start from a clean clone and check that the documented instructions alone are enough to run the application.
+
+### Final checklist
+
+- [x] clone the repository into a clean directory;
+- [x] configure environment variables from `.env.example`;
+- [x] run `docker compose up`;
+- [x] confirm migrations apply correctly;
+- [x] confirm frontend, API, PostgreSQL, Redis, and worker start;
+- [x] create a link in the UI;
+- [x] open the short link;
+- [x] confirm the `302` redirect;
+- [x] confirm the access was recorded;
+- [x] query statistics;
+- [x] disable the link;
+- [x] confirm the next access returns `410`;
+- [x] run the full test suite;
+- [x] check that no secret was committed;
+- [x] review the commit history;
+- [x] review the README;
+- [x] review the system design;
+- [x] check that I can justify the implemented decisions.
+
+Only after that validation is the repository shared for review.
+
+---
+
+## Scope-cut order
+
+If the schedule gets tight, I prioritize in this order:
+
+1. the application starting correctly with Docker Compose;
+2. backend business rules;
+3. redirect and its error cases;
+4. automated tests;
+5. asynchronous access recording;
+6. statistics endpoint;
+7. a working frontend;
+8. visual polish and refinements.
+
+I do not trade correctness or tests for infrastructure or finish work that is outside the main criteria.

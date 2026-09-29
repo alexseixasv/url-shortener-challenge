@@ -1,47 +1,47 @@
 ---
-description: Guardrails de implementação do frontend Vite/React (apps/web)
+description: Vite/React frontend implementation guardrails (apps/web)
 globs: apps/web/**
 alwaysApply: false
 ---
 
 # Frontend
 
-Rule de implementação — não substitui `architect`, `testing` ou `reviewer`.
-Consulte `README.MD` e os contratos da API documentados. Não invente comportamento de domínio no cliente.
+Implementation rule — it does not replace `architect`, `testing`, or `reviewer`.
+Consult `README.MD` and the documented API contracts. Do not invent domain behavior on the client.
 
 ## React
 
-- Componentes com responsabilidade clara; evite componentes gigantes.
-- Estado local por padrão; não introduza state manager sem necessidade.
-- Evite effects para estado derivável; effects = sincronização real; cleanup quando houver recurso/assinatura.
+- Components with a clear responsibility; avoid giant components.
+- Local state by default; do not introduce a state manager without a need.
+- Avoid effects for derivable state; effects = real synchronization; cleanup when there is a resource or subscription.
 
 ## TypeScript
 
-- Props e contratos tipados; evite `any`.
-- Não duplique manualmente estruturas incompatíveis com o contrato da API.
-- Trate null/optional conscientemente.
+- Typed props and contracts; avoid `any`.
+- Do not manually duplicate structures that disagree with the API contract.
+- Handle null/optional consciously.
 
 ## API integration
 
-- Backend é autoridade das regras de negócio; validação no frontend é UX, não substituto do backend.
-- Trate loading, error, empty e success; evite chamadas duplicadas; trate requests concorrentes quando relevantes.
-- Não assuma formato de erro sem contrato.
+- The backend is the authority for business rules; frontend validation is UX, not a substitute for the backend.
+- Handle loading, error, empty, and success; avoid duplicate calls; handle concurrent requests when relevant.
+- Do not assume an error shape without a contract.
 
-## UX do challenge
+## UX
 
-Prioridade: correctness → clareza → feedback ao usuário → polish.
+Priority: correctness → clarity → user feedback → polish.
 
-A UI deve deixar claros: operação em andamento, sucesso, erro, estado vazio e dados retornados.
-Não adicione design system, state manager ou data-fetching framework sem necessidade concreta.
+The UI must make clear: in-progress work, success, error, empty state, and returned data.
+Do not add a design system, state manager, or data-fetching framework without a concrete need.
 
 ## Accessibility
 
-Sem projeto de design: HTML semântico; labels; usabilidade por teclado; mensagens de erro compreensíveis; elementos interativos apropriados.
+Semantic HTML; labels; keyboard use; understandable error messages; appropriate interactive elements.
 
 ## Performance
 
-Sem otimização prematura; evite renders/requisições obviamente desnecessários; keys estáveis em listas; sem memoization sem motivo.
+No premature optimization; avoid obviously unnecessary renders/requests; stable list keys; no memoization without a reason.
 
 ## Testing
 
-Quando houver testes frontend: comportamento observável; não detalhes internos; priorize fluxos relevantes do usuário.
+When there are frontend tests: observable behavior; not internal details; prioritize relevant user flows.

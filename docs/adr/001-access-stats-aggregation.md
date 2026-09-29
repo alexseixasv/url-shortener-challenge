@@ -1,73 +1,73 @@
-# ADR-001: Agregação de estatísticas de acesso
+# ADR-001: Access statistics aggregation
 
-## Contexto
+## Context
 
-Links podem acumular mais de 10 milhões de acessos individuais. O endpoint de estatísticas precisa devolver:
+A link can accumulate more than 10 million individual accesses. The statistics endpoint must return:
 
-- total lifetime de acessos;
-- série diária dos últimos sete dias;
-- últimos 20 acessos com metadados (referer, user-agent).
+- lifetime access total;
+- a daily series for the last seven days;
+- the last 20 accesses with metadata (referer, user-agent).
 
-Calcular esses valores diretamente sobre a tabela de eventos a cada leitura não escala no caminho de consulta.
+Computing those values directly over the event table on every read does not scale on the query path.
 
-## Alternativas consideradas
+## Alternatives considered
 
-### 1. Calcular diretamente de AccessEvent
+### 1. Compute directly from AccessEvent
 
-Cada consulta de stats executaria `COUNT(*)` e/ou `GROUP BY` sobre os eventos do link.
+Each stats query would run `COUNT(*)` and/or `GROUP BY` over the link's events.
 
-- Positivo: uma única fonte de verdade; sem risco de divergência.
-- Negativo: custo proporcional ao histórico; inviável com milhões de linhas no p95 desejado.
+- Positive: a single source of truth; no divergence risk.
+- Negative: cost proportional to history; not viable at the desired p95 with millions of rows.
 
-### 2. Agregar apenas DailyLinkStat
+### 2. Aggregate only DailyLinkStat
 
-Manter somente contadores diários e derivar o total lifetime com `SUM(click_count)`.
+Keep only daily counters and derive the lifetime total with `SUM(click_count)`.
 
-- Positivo: série dos 7 dias fica barata.
-- Negativo: o total lifetime exige histórico diário completo desde a criação; qualquer lacuna ou retenção parcial corrompe o total; `SUM` cresce com a idade do link.
+- Positive: the 7-day series stays cheap.
+- Negative: the lifetime total requires the full daily history since creation; any gap or partial retention corrupts the total; `SUM` grows with the age of the link.
 
-### 3. Manter `Link.clickCount` + `DailyLinkStat` (escolhida)
+### 3. Keep `Link.clickCount` + `DailyLinkStat` (chosen)
 
-- `AccessEvent`: histórico granular (write model / fatos).
-- `Link.clickCount`: agregado / read model do total lifetime.
-- `DailyLinkStat`: agregado / read model para consultas temporais (ex.: últimos 7 dias).
+- `AccessEvent`: granular history (write model / facts).
+- `Link.clickCount`: aggregate / read model of the lifetime total.
+- `DailyLinkStat`: aggregate / read model for time-series queries (for example, the last 7 days).
 
-Os agregados existem para evitar `COUNT(*)` e `GROUP BY` sobre milhões de `AccessEvent` no endpoint de stats.
+The aggregates exist to avoid `COUNT(*)` and `GROUP BY` over millions of `AccessEvent` rows on the stats endpoint.
 
-### 4. Tabela separada de totais
+### 4. Separate totals table
 
-Extrair o total para algo como `link_totals(link_id, click_count)`.
+Extract the total into something like `link_totals(link_id, click_count)`.
 
-- Positivo: separa fisicamente o agregado do restante do link.
-- Negativo: join adicional sem benefício claro; a coluna em `Link` já atende leitura O(1) no mesmo registro usado no redirect/stats.
+- Positive: physically separates the aggregate from the rest of the link.
+- Negative: an extra join with no clear benefit; the column on `Link` already gives O(1) reads on the same row used by redirect/stats.
 
-## Decisão
+## Decision
 
-Adotar a alternativa 3:
+Adopt alternative 3:
 
-- persistir cada acesso em `AccessEvent`;
-- manter `links.click_count` como total lifetime denormalizado;
-- manter `daily_link_stats` com PK `(link_id, date)` para séries temporais;
-- servir os últimos 20 acessos via índice em `(link_id, accessed_at DESC)` sobre `AccessEvent`.
+- persist each access in `AccessEvent`;
+- keep `links.click_count` as a denormalized lifetime total;
+- keep `daily_link_stats` with PK `(link_id, date)` for time series;
+- serve the last 20 accesses via an index on `(link_id, accessed_at DESC)` over `AccessEvent`.
 
-## Consequências
+## Consequences
 
-### Positivas
+### Positive
 
-- Stats com custo limitado independentemente do volume de eventos.
-- Modelo alinhado ao fluxo assíncrono (redirect não espera `INSERT` síncrono).
-- Separação clara entre fato (`AccessEvent`) e read models (`clickCount`, `DailyLinkStat`).
+- Stats cost stays bounded regardless of event volume.
+- Model matches the asynchronous flow (the redirect does not wait for a synchronous `INSERT`).
+- Clear split between the fact (`AccessEvent`) and the read models (`clickCount`, `DailyLinkStat`).
 
-### Negativas
+### Negative
 
-- Consistência eventual entre eventos e agregados enquanto o worker processa a fila.
-- O worker atualiza evento + agregados na mesma transação (ver ADR-003); falhas exigem retry/reclaim (coberto pelo consumer group / DLQ).
-- Possível divergência temporária visível em stats/`clickCount` até o processamento concluir.
+- Eventual consistency between events and aggregates while the worker processes the queue.
+- The worker updates the event and the aggregates in the same transaction (see ADR-003); failures require retry/reclaim (covered by the consumer group / DLQ).
+- Temporary divergence can show up in stats / `clickCount` until processing finishes.
 
 ## Status
 
 Accepted.
 
-## Fora deste ADR
+## Outside this ADR
 
-O mecanismo concreto de fila/worker está em [ADR-003](./003-analytics-redis-streams.md). A concorrência de `maxClicks` no hot path está em [ADR-002](./002-maxclicks-postgresql-authority.md).
+The concrete queue/worker mechanism is in [ADR-003](./003-analytics-redis-streams.md). Hot-path `maxClicks` concurrency is in [ADR-002](./002-maxclicks-postgresql-authority.md).

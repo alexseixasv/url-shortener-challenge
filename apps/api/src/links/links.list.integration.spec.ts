@@ -10,7 +10,7 @@ import { LINK_LIST_LIMIT, LinksService } from './links.service.js';
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 
 describe('LinksService.list (unit empty)', () => {
-  it('banco vazio → items []', async () => {
+  it('empty database → items []', async () => {
     const prisma = {
       link: {
         findMany: vi.fn().mockResolvedValue([]),
@@ -92,7 +92,7 @@ describe.runIf(hasDatabase)('LinksService.list (integration)', () => {
     `;
   }
 
-  it('1 link: campos corretos e shortUrl', async () => {
+  it('1 link: correct fields and shortUrl', async () => {
     await sanitizeUnsafeClickCounts();
     const slug = uniqueSlug('l1');
     await links.create({
@@ -117,7 +117,7 @@ describe.runIf(hasDatabase)('LinksService.list (integration)', () => {
     expect(item).not.toHaveProperty('updatedAt');
   });
 
-  it('múltiplos links → createdAt DESC (entre os nossos)', async () => {
+  it('multiple links → createdAt DESC (among ours)', async () => {
     const older = uniqueSlug('lo');
     const newer = uniqueSlug('ln');
     tipMs += 1000;
@@ -144,7 +144,7 @@ describe.runIf(hasDatabase)('LinksService.list (integration)', () => {
     expect(iNewer).toBeLessThan(iOlder);
   });
 
-  it('exatamente 50 e mais de 50 → somente 50 mais recentes', async () => {
+  it('exactly 50 and more than 50 → only the 50 most recent', async () => {
     await clearTipWindow();
     await sanitizeUnsafeClickCounts();
     const batchSlug = `lb${runId}`;
@@ -182,7 +182,7 @@ describe.runIf(hasDatabase)('LinksService.list (integration)', () => {
     });
   });
 
-  it('active false / expired / maxed continuam listados', async () => {
+  it('active false / expired / maxed stay listed', async () => {
     const slugDis = uniqueSlug('ld');
     const slugExp = uniqueSlug('le');
     const slugMax = uniqueSlug('lm');
@@ -219,7 +219,7 @@ describe.runIf(hasDatabase)('LinksService.list (integration)', () => {
     expect(listed.items.find((i) => i.slug === slugMax)?.clickCount).toBe(1);
   });
 
-  it('clickCount vem de Link.clickCount, não de AccessEvent', async () => {
+  it('clickCount comes from Link.clickCount, not from AccessEvent', async () => {
     const slug = uniqueSlug('lc');
     await links.create({ url: 'https://example.com/cc', slug });
     const link = await prisma.link.findUniqueOrThrow({ where: { slug } });
@@ -240,7 +240,7 @@ describe.runIf(hasDatabase)('LinksService.list (integration)', () => {
     expect(item?.clickCount).toBe(77);
   });
 
-  it('BigInt seguro; overflow → InternalServerErrorException', async () => {
+  it('safe BigInt; overflow → InternalServerErrorException', async () => {
     const slugOk = uniqueSlug('lbo');
     await links.create({ url: 'https://example.com/bok', slug: slugOk });
     await prisma.link.update({

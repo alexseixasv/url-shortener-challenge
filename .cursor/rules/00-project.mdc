@@ -1,15 +1,15 @@
 ---
-description: Políticas globais do projeto (escopo, docs, git, qualidade)
+description: Global project policies (scope, docs, git, quality)
 alwaysApply: true
 ---
 
-# Políticas do projeto
+# Project policies
 
-- Respeite estritamente o escopo solicitado; não antecipe funcionalidades.
-- Fontes de verdade: `README.MD`, `docs/architecture/`, `docs/adr/`. Antes de alterar arquitetura, contrato ou modelo, consulte a documentação relevante.
-- Não duplique decisões arquiteturais nestas rules — apenas aponte para a documentação.
-- Não adicione dependências sem justificativa concreta para o problema atual.
-- Prefira alterações pequenas e revisáveis.
-- Testes verdes não provam correção conceitual.
-- Se a implementação alterar uma decisão documentada, atualize a fonte de verdade correspondente.
-- Nunca execute `git add`, `git commit` ou `git push` sem pedido explícito do usuário.
+- Stay strictly within the requested scope; do not anticipate features.
+- Sources of truth: `README.MD`, `docs/architecture/`, `docs/adr/`. Before changing architecture, contracts, or the model, read the relevant documentation.
+- Do not duplicate architectural decisions in these rules — point at the documentation.
+- Do not add dependencies without a concrete reason for the current problem.
+- Prefer small, reviewable changes.
+- Green tests do not prove conceptual correctness.
+- If an implementation changes a documented decision, update the corresponding source of truth.
+- Never run `git add`, `git commit`, or `git push` without an explicit user request.

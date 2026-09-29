@@ -28,13 +28,13 @@ describe.runIf(hasDatabase && hasRedis)('GET /links/:slug/stats (e2e)', () => {
     return `${prefix}${randomBytes(4).toString('hex')}`;
   }
 
-  it('404 para slug inexistente', async () => {
+  it('404 for a missing slug', async () => {
     await request(app.getHttpServer())
       .get(`/links/${uniqueSlug('nostats')}/stats`)
       .expect(404);
   });
 
-  it('link sem acessos retorna contrato completo', async () => {
+  it('link with no accesses returns the full contract', async () => {
     const slug = uniqueSlug('e2es0');
     await request(app.getHttpServer())
       .post('/links')
@@ -56,7 +56,7 @@ describe.runIf(hasDatabase && hasRedis)('GET /links/:slug/stats (e2e)', () => {
     });
   });
 
-  it('sparse daily + recent + disabled ainda 200', async () => {
+  it('sparse daily + recent + disabled still 200', async () => {
     const slug = uniqueSlug('e2ess');
     await request(app.getHttpServer())
       .post('/links')
@@ -103,7 +103,7 @@ describe.runIf(hasDatabase && hasRedis)('GET /links/:slug/stats (e2e)', () => {
     expect(res.body.recentAccesses[0].userAgent).toBe('e2e-agent');
   });
 
-  it('expired e maxed ainda retornam stats', async () => {
+  it('expired and maxed still return stats', async () => {
     const slugExp = uniqueSlug('e2eex');
     await request(app.getHttpServer())
       .post('/links')

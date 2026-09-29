@@ -1,62 +1,62 @@
-# ADR-002: Autoridade de maxClicks no PostgreSQL
+# ADR-002: PostgreSQL as the authority for maxClicks
 
-## Contexto
+## Context
 
-`maxClicks` precisa permanecer correto sob concorrência. O cache Redis não pode criar uma segunda autoridade para autorização de redirect. Links unlimited (`maxClicks` null) e capped podem seguir caminhos diferentes no hot path.
+`maxClicks` must stay correct under concurrency. The Redis cache must not become a second authority for redirect authorization. Unlimited links (`maxClicks` null) and capped links can take different paths on the hot path.
 
-## Alternativas consideradas
+## Alternatives considered
 
 ### 1. Check then increment
 
-Ler `clickCount`, comparar com `maxClicks`, depois incrementar.
+Read `clickCount`, compare it with `maxClicks`, then increment.
 
-- Negativo: TOCTOU sob concorrência; pode autorizar além do limite.
+- Negative: TOCTOU under concurrency; can authorize past the limit.
 
 ### 2. `SELECT FOR UPDATE`
 
-Serializa a linha antes do incremento.
+Serializes the row before the increment.
 
-- Negativo: mais round trips e locks explícitos sem vantagem clara frente a um único `UPDATE` condicional.
+- Negative: more round trips and explicit locks with no clear advantage over a single conditional `UPDATE`.
 
-### 3. Contador Redis + fallback stale no PostgreSQL
+### 3. Redis counter + stale PostgreSQL fallback
 
-Redis como gate; em falha, consultar PG potencialmente desatualizado.
+Redis as the gate; on failure, read potentially stale PostgreSQL.
 
-- Negativo: duas autoridades; fail-open ou fail-closed inconsistentes; cache/stale não fecham o invariant.
+- Negative: two authorities; inconsistent fail-open or fail-closed behavior; cache/stale data does not close the invariant.
 
-### 4. Redis como autoridade durável do contador
+### 4. Redis as the durable counter authority
 
-- Negativo: Redis deixa de ser cache/fila e passa a ser source of truth para um invariant de negócio.
+- Negative: Redis stops being cache/queue and becomes the source of truth for a business invariant.
 
-### 5. `UPDATE` condicional atômico no PostgreSQL (escolhida)
+### 5. Atomic conditional `UPDATE` in PostgreSQL (chosen)
 
-Uma única operação decide autorização para links capped.
+A single operation decides authorization for capped links.
 
-## Decisão
+## Decision
 
-- Links **capped**: autorização exclusiva via PostgreSQL com `UPDATE` condicional atômico.
-- Redis no redirect armazena **somente metadata** (sem `clickCount` para enforcement).
-- Condições do `UPDATE` (equivalente):
+- **Capped** links: exclusive authorization via an atomic conditional `UPDATE` in PostgreSQL.
+- Redis on the redirect stores **metadata only** (no `clickCount` for enforcement).
+- `UPDATE` conditions (equivalent):
   - `active = true`
-  - `expiresAt` nulo ou no futuro
+  - `expiresAt` null or in the future
   - `maxClicks IS NOT NULL`
   - `clickCount < maxClicks`
-- **1 row** retornada → redirect autorizado (`preCounted=true` no evento de analytics).
+- **1 row** returned → redirect authorized (`preCounted=true` on the analytics event).
 - **0 rows** → `410 Gone`.
-- Links **unlimited**: sem `UPDATE` síncrono de `clickCount` no request; o worker incrementa após o evento.
+- **Unlimited** links: no synchronous `clickCount` `UPDATE` on the request; the worker increments after the event.
 
-## Consequências
+## Consequences
 
-### Positivas
+### Positive
 
-- Correção forte sob concorrência para o teto de cliques.
-- Uma única autoridade durável (PostgreSQL).
-- Unlimited evita o write no hot path.
+- Strong correctness under concurrency for the click ceiling.
+- A single durable authority (PostgreSQL).
+- Unlimited avoids the write on the hot path.
 
-### Negativas
+### Negative
 
-- Capped paga um write no PostgreSQL a cada acesso autorizado.
-- Links capped quentes podem sofrer contenção de linha.
+- Capped pays a PostgreSQL write on every authorized access.
+- Hot capped links can see row contention.
 
 ## Status
 
